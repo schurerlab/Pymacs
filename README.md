@@ -55,7 +55,6 @@ Pymacs/
 ```
 
 ---
-
 ## ⚙️ System Requirements
 
 - **OS:** Linux or WSL2  
@@ -69,6 +68,85 @@ Pymacs/
 
 ---
 
+## 🧪 Ligand Parameterization Requirements (CGenFF / SILCSBio)
+
+Ligand parameterization in PyMACS relies on **CGenFF** and supports **two equivalent workflows**:
+
+---
+
+### ✅ Option 1 — Local SILCSBio Installation (Recommended)
+
+For fully automated ligand processing, **SILCSBio** must be installed locally and available in your `PATH`.  
+SILCSBio is **free for academic users** and can be obtained from:
+
+👉 https://cgenff.com/
+
+After installation, ensure the following environment variables are set:
+
+```bash
+export SILCSBIO_HOME=$HOME/silcsbio.2024.1
+export PATH="$SILCSBIO_HOME/programs:$SILCSBIO_HOME:$PATH"
+```
+
+This configuration enables PyMACS to:
+
+- Automatically extract ligands from the input PDB  
+- Generate `.mol2` files  
+- Run CGenFF locally  
+- Convert CHARMM stream files into GROMACS-compatible formats  
+
+This is the **preferred workflow** for headless execution and high-throughput studies.
+
+---
+
+### 🔁 Option 2 — CGenFF Online Server (No Local Installation Required)
+
+If SILCSBio cannot be installed locally, PyMACS can still be used by leveraging the **CGenFF online server**.
+
+In this case, users must manually:
+
+1. Upload the ligand structure to the CGenFF server  
+2. Download the resulting files:  
+   - `<LIG>.cgenff.mol2`  
+   - `<LIG>.str`  
+3. Place both files in the working directory **before running PyMACS**
+
+#### ⚠️ Critical naming and formatting requirements
+
+To ensure correct ligand detection and topology generation:
+
+- The ligand **residue name** in the PDB (three-letter code, e.g. `DR7`) **must match exactly**  
+- The MOL2 file **must be named**:
+
+```
+DR7.cgenff.mol2
+```
+
+- The CHARMM stream file **must be named**:
+
+```
+DR7.str
+```
+
+- The uploaded ligand structure **must contain hydrogens**  
+- Atom naming and bonding must be chemically consistent
+
+Failure to meet these requirements may cause ligand parsing or force-field generation to fail.
+
+Once the correctly named `.cgenff.mol2` and `.str` files are present, PyMACS will automatically detect and use them, bypassing the need for a local SILCSBio installation.
+
+---
+
+### 🧠 Summary
+
+| Workflow | SILCSBio Required | Automation Level |
+|--------|------------------|------------------|
+| Local SILCSBio | ✅ Yes | Fully automated |
+| Online CGenFF | ❌ No | Semi-manual (ligand only) |
+
+Both approaches generate **identical CGenFF parameters** and are fully compatible with downstream PyMACS workflows.
+
+---
 ## 🧪 Conda Environments
 
 Two reproducible environments are provided:
@@ -111,7 +189,7 @@ Prepares a complete GROMACS-ready system from an input PDB.
 
 ```bash
 conda activate cgenff
-python 1_AutomateGromacs.py --pdb input.pdb --ligand GDP
+python 1_AutomateGromacs.py 
 ```
 
 ---
@@ -201,5 +279,6 @@ If you use PyMACS in academic work, please cite:
 ## 📬 Contact
 
 For questions, issues, or contributions, please open a GitHub Issue or contact the jmschulz@med.miami.edu directly.
+
 
 
