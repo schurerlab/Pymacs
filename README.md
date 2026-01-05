@@ -134,7 +134,7 @@ Runs the full MD protocol:
 
 ```bash
 conda activate mdanalysis
-python 2_AutomateGromacs.py --mode ligand --ligand GDP --ns 100 --gpu 0
+python 2_AutomateGromacs.py 
 ```
 
 ---
@@ -151,7 +151,7 @@ Performs structural and dynamical analysis of MD trajectories.
 - Ligand–protein interaction persistence
 
 ```bash
-python 3A_AutomateGromacs.py --topo md.tpr --traj md.xtc --ligand GDP
+python 3A_AutomateGromacs.py 
 ```
 
 ---
@@ -176,6 +176,9 @@ Assembles analysis outputs into a **single, publication-ready PDF**.
 - Batch-safe execution across many systems  
 - Suitable for supplements and internal reports
 
+```bash
+python 4PDF4MD.py 
+```
 ---
 
 ## 🧠 Best Practices
@@ -198,4 +201,5 @@ If you use PyMACS in academic work, please cite:
 ## 📬 Contact
 
 For questions, issues, or contributions, please open a GitHub Issue or contact the jmschulz@med.miami.edu directly.
+
 
