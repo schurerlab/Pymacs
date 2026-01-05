@@ -1,308 +1,201 @@
-# 🧬 **GROMACS Automation Suite (GMX-Automation)**
+# 🧬 PyMACS  
+**Python Molecular Analysis & Clustering Suite**
 
-### End-to-End Molecular Dynamics Workflow for Proteins, Ligands, and PROTAC Systems
+*A modular GROMACS automation, analysis, and figure-generation toolkit for molecular dynamics workflows*
 
-**Author:** Joseph-Michael Schulz (University of Miami)
-**Version:** 3.0 — October 2025
+**Author:** Joseph-Michael Schulz  
+**Affiliation:** University of Miami  
+**Status:** Active development (official repository)
 
 ---
 
 ## 📖 Overview
 
-This repository provides a **fully automated molecular dynamics (MD)** pipeline built around **GROMACS 2023+**, **CHARMM36**, and **Conda-based environments**.
-The workflow prepares, equilibrates, simulates, and analyzes complex biomolecular systems (proteins, protein–ligand, or PROTAC ternary systems) with a **single command**.
+**PyMACS** is a Python-based toolkit for **automating molecular dynamics (MD) simulations**, **trajectory analysis**, and **publication-ready figure generation** using **GROMACS** and the **CHARMM36 force field**.
 
-**Note:** This workflow assumes that the `gmx` binary (non-MPI version) is available within your active environment.
-It is *not* intended for `gmx_mpi` or cluster MPI execution unless explicitly adapted.
+The project is designed to support **protein**, **protein–ligand**, and **PROTAC / ternary complex** workflows with a strong emphasis on:
+
+- Reproducibility  
+- Scriptable, headless execution  
+- Scalable analysis across many simulations  
+- Clean downstream visualization and reporting  
+
+PyMACS is intended for **computational structural biology**, **drug discovery**, and **targeted protein degradation (TPD)** research.
 
 ---
 
-## 🧩 Directory Structure
+## 🧩 Repository Structure
 
 ```
-GMX-Automation/
+Pymacs/
 │
-├── 00_RUNMDfull.sh            # Master launcher: setup → simulation → logging (tmux compatible)
-├── 1_AutomateGromacs.py       # Step 1: system setup (chains, topology, solvation, ions)
-├── 2_AutomateGromacs.py       # Step 2: equilibration + production MD (GPU-ready)
-├── 2A_AutoGMXrestart.py       # Step 2B: restart & postprocessing (resume MD + wrap trajectory + pocket)
-├── 3A_AutomateGromacs.py      # Step 3: advanced RMSD/RMSF + contact/pocket analysis
+├── 1_AutomateGromacs.py        # System preparation & topology generation
+├── 2_AutomateGromacs.py        # Energy minimization, equilibration, production MD
+├── 3A_AutomateGromacs.py       # Trajectory analysis (RMSD, RMSF, contacts)
+├── 3B_NETWORX.py               # Interaction network & contact graph analysis
 │
-├── MDPs/                      # Energy minimization, NVT, NPT, MD parameter templates
-├── charmm36_ljpme-jul2022.ff/ # CHARMM36 forcefield directory
+├── 4PDF4MD.py                  # Automated PDF report / figure compilation
+├── 4_MDfigs.txt                # Figure configuration / figure list
 │
-├── cgenff_charmm2gmx_py3_nx2.py  # Ligand topology conversion helper
-├── PROTAC_AnalysisScripts.py     # (optional) Advanced PROTAC-specific utilities
+├── charmm36_ljpme-jul2022.ff/  # CHARMM36 force field (LJ-PME)
 │
-├── environment_cgenff.yml     # Conda environment for ligand parameterization
-├── environment_mdanalysis.yml # Conda environment for MD + analysis
+├── cgenff_charmm2gmx_py3_nx2.py # CGenFF → GROMACS ligand conversion helper
 │
-└── GMXanalysis.md             # (optional) Notes or prior run summaries
+├── em.mdp                      # Energy minimization parameters
+├── nvt.mdp                     # NVT equilibration parameters
+├── npt.mdp                     # NPT equilibration parameters
+├── md.mdp                      # Production MD parameters
+├── ions.mdp                    # Ion generation parameters
+│
+├── environment_cgenff.yml      # Conda env: ligand parameterization
+├── environment_mdanalysis.yml  # Conda env: MD & analysis
+├── recreate_envs.sh            # Convenience script for env recreation
+│
+└── README.md
 ```
 
 ---
 
 ## ⚙️ System Requirements
 
-* **OS:** Linux or WSL2
-* **GROMACS:** 2022+ (GPU build, non-MPI) — must be accessible as `gmx`
-* **Python:** ≥3.9
-* **Conda Environments:**
+- **OS:** Linux or WSL2  
+- **Python:** ≥ 3.9  
+- **GROMACS:** 2022+ (non-MPI build, available as `gmx`)  
+- **GPU:** Optional but recommended for production MD  
+- **Conda / Mamba:** Required  
 
-  * `cgenff` → ligand parameterization (Open Babel, SILCSBio, CGenFF)
-  * `mdanalysis` → simulation & postprocessing (GROMACS, MDAnalysis, MDTraj, NumPy, etc.)
-* **tmux:** optional but recommended for background runs
-  Install: `sudo apt install tmux`
-
----
-
-## 🚀 Quick Start (Full Pipeline)
-
-### 1️⃣ Make the launcher executable:
-
-```bash
-chmod +x 00_RUNMDfull.sh
-```
-
-### 2️⃣ Run interactively:
-
-```bash
-./00_RUNMDfull.sh
-```
-
-You will be prompted to:
-
-* Choose your input PDB file
-* Select simulation type (Ligand–Protein, Protein–Protein, PROTAC, or Protein-only)
-* Confirm or specify ligand (3-letter code)
-* Assign chain names
-* Define simulation time (e.g., 50 ns)
-
-The launcher automatically:
-
-* Activates required Conda environments (`cgenff` → setup, `mdanalysis` → MD run)
-* Executes both setup (`1_AutomateGromacs.py`) and simulation (`2_AutomateGromacs.py`)
-* Logs all output to `mdrun.log`
-* Runs within a persistent **tmux session** (`MDRUN` by default)
+> ⚠️ This repository assumes **`gmx` (non-MPI)** execution.  
+> MPI / cluster usage requires adaptation.
 
 ---
 
-## 🧠 Headless / Batch Mode Usage
-
-You can skip all prompts by predefining environment variables:
-
-```bash
-SESSION=MDRUN \
-PROJECT_DIR=$PWD \
-LIG_CODE=GDP \
-SIM_TYPE=1 \
-MD_NS=100 \
-./00_RUNMDfull.sh
-```
-
-Or export them beforehand:
-
-```bash
-export SESSION=Rap1_MD
-export PROJECT_DIR=$PWD
-export LIG_CODE=GDP
-export SIM_TYPE=1
-./00_RUNMDfull.sh
-```
-
----
-
-## 🧩 Step-by-Step Breakdown
-
-### 🧱 Step 1 — System Setup (`1_AutomateGromacs.py`)
-
-Configures your molecular system: chain mapping, topology generation, solvation, and ionization.
-
-**Features:**
-
-* Automatic ligand detection (non-water HETATM records)
-* CHARMM36 forcefield selection (auto-detected)
-* CGenFF-based ligand parameterization (SILCSBio)
-* Solvation and neutralization (0.15 M NaCl)
-* Writes processed topology and coordinate files
-* Generates `atomIndex.txt` mapping chain names and indices
-
-**Example (headless):**
-
-```bash
-python 1_AutomateGromacs.py \
-  --pdb Model_2.pdb \
-  --chain-map "A:Rap1B,B:Rap1GAP" \
-  --ligand GDP
-```
-
-**Output Example:**
-
-```
-Model_2/
-├── topol.top
-├── complex.gro
-├── solv_ions.gro
-├── GDP.itp / GDP.prm
-├── index.ndx
-└── em.tpr
-```
-
----
-
-### ⚙️ Step 2 — Equilibration & Production (`2_AutomateGromacs.py`)
-
-Performs the **Energy Minimization → NVT → NPT → MD** workflow in sequence.
-
-**Modes:**
-
-* `protein` — single-protein simulation
-* `ligand` — protein–ligand complex
-* `protac` — ternary (E3–linker–target) complex
-
-**Example (100 ns GPU run):**
-
-```bash
-python 2_AutomateGromacs.py --mode ligand --ligand GDP --ns 100 --gpu 0
-```
-
-**Outputs:**
-
-```
-em.gro, nvt.gro, npt.gro
-md_0_1.xtc, md_0_1.tpr, md_0_1.log, md_0_1.cpt
-```
-
-**Key Features:**
-
-* Automatic GPU detection (`nvidia-smi`)
-* Adaptive multithreading (`OMP_NUM_THREADS`)
-* Dynamic update of tc-grps (protein/ligand)
-* Automatic `nsteps` scaling based on nanoseconds
-* Ligand restraint integration into topology
-
----
-
-### 🔁 Step 2B — Restart & Finalization (`2A_AutoGMXrestart.py`)
-
-Handles continuation from checkpoints and trajectory cleanup.
-
-**Example:**
-
-```bash
-python 2A_AutoGMXrestart.py --ligand GDP --gpu 0
-```
-
-**Actions:**
-
-* Detects `md_0_1.cpt` checkpoint and resumes simulation
-* Wraps and recenters the trajectory (`Final_Trajectory.xtc`)
-* Extracts binding pocket (`binding_pocket_only.pdb/.xtc`)
-* Generates visual-ready `Final_Trajectory.pdb`
-
-**Outputs:**
-
-```
-Final_Trajectory.xtc / Final_Trajectory.pdb
-binding_pocket_only.xtc / binding_pocket_only.pdb
-```
-
----
-
-### 📊 Step 3 — Trajectory Analysis (`3A_AutomateGromacs.py`)
-
-Performs comprehensive RMSD/RMSF analysis and interaction network mapping.
-
-**Example:**
-
-```bash
-python 3A_AutomateGromacs.py \
-  --topo Final_Trajectory.pdb \
-  --traj Final_Trajectory.xtc \
-  --ligand GDP \
-  --threads 16
-```
-
-**Outputs:**
-
-```
-Analysis_Results/
-├── RMSD_RMSF_Plots/
-├── residue_contact_frequency.png
-├── GDP_interaction_network.png
-└── binding_pocket_only.pdb/.xtc
-```
-
-**Features:**
-
-* Parallelized frame alignment (multi-core)
-* GPU-accelerated distance computations (CuPy)
-* Ligand–protein contact persistence heatmaps
-* RMSD, RMSF, and residue-wise interaction plots
-
----
-
-## 🧪 Environment Setup (Reference)
+## 🧪 Conda Environments
 
 Two reproducible environments are provided:
 
-| Environment  | Purpose                 | YAML File                    |
-| ------------ | ----------------------- | ---------------------------- |
-| `cgenff`     | Ligand parameterization | `environment_cgenff.yml`     |
-| `mdanalysis` | Simulation & analysis   | `environment_mdanalysis.yml` |
+| Environment | Purpose | File |
+|------------|-------|------|
+| `cgenff` | Ligand parameterization (CGenFF, Open Babel) | `environment_cgenff.yml` |
+| `mdanalysis` | MD execution & analysis | `environment_mdanalysis.yml` |
 
-Recreate them on another system with:
+Create both with:
 
 ```bash
 conda env create -f environment_cgenff.yml
 conda env create -f environment_mdanalysis.yml
 ```
 
----
+Or recreate automatically:
 
-## 🧭 tmux Session Management
-
-| Action            | Command                      |
-| ----------------- | ---------------------------- |
-| View sessions     | `tmux ls`                    |
-| Attach to session | `tmux attach -t MDRUN`       |
-| Detach safely     | `Ctrl + B`, then `D`         |
-| Kill session      | `tmux kill-session -t MDRUN` |
-
-All logs and progress are written to `mdrun.log` in real time.
+```bash
+bash recreate_envs.sh
+```
 
 ---
 
-## 📁 Example Output Layout
+## 🧱 Step 1 — System Setup  
+**`1_AutomateGromacs.py`**
 
+Prepares a complete GROMACS-ready system from an input PDB.
+
+### Capabilities
+
+- Chain parsing and mapping  
+- CHARMM36 topology generation  
+- Automatic ligand detection (HETATM, non-water)  
+- CGenFF-based ligand parameterization  
+- Solvation and ionization (physiological salt)  
+- Index and atom mapping generation
+
+### Example
+
+```bash
+conda activate cgenff
+python 1_AutomateGromacs.py --pdb input.pdb --ligand GDP
 ```
-MyProtein_MD/
-├── mdrun.log
-├── .mdrun_payload.sh
-├── protein_processed.gro
-├── topol.top
-├── em.gro → nvt.gro → npt.gro → md_0_1.xtc
-├── md_0_1.cpt (checkpoint)
-├── Final_Trajectory.xtc / .pdb
-├── binding_pocket_only.pdb / .xtc
-└── Analysis_Results/
+
+---
+
+## ⚙️ Step 2 — Equilibration & Production MD  
+**`2_AutomateGromacs.py`**
+
+Runs the full MD protocol:
+
+**Energy Minimization → NVT → NPT → Production MD**
+
+### Features
+
+- GPU-aware execution  
+- Automatic `nsteps` scaling from nanoseconds  
+- Protein / ligand temperature coupling groups  
+- Checkpoint-safe execution
+
+### Example
+
+```bash
+conda activate mdanalysis
+python 2_AutomateGromacs.py --mode ligand --ligand GDP --ns 100 --gpu 0
 ```
+
+---
+
+## 📊 Step 3 — Trajectory Analysis  
+**`3A_AutomateGromacs.py`**
+
+Performs structural and dynamical analysis of MD trajectories.
+
+### Outputs
+
+- RMSD and RMSF profiles  
+- Residue-wise contact frequencies  
+- Ligand–protein interaction persistence
+
+```bash
+python 3A_AutomateGromacs.py --topo md.tpr --traj md.xtc --ligand GDP
+```
+
+---
+
+## 🕸 Step 3B — Interaction Networks  
+**`3B_NETWORX.py`**
+
+Generates interaction networks and contact graphs for protein–ligand or ternary systems.
+
+- Residue–residue and residue–ligand networks  
+- Graph-based interaction persistence  
+- Visual-ready network outputs
+
+---
+
+## 📄 Automated Figures & Reports  
+**`4PDF4MD.py`**
+
+Assembles analysis outputs into a **single, publication-ready PDF**.
+
+- Figure ordering controlled via `4_MDfigs.txt`  
+- Batch-safe execution across many systems  
+- Suitable for supplements and internal reports
 
 ---
 
 ## 🧠 Best Practices
 
-* Ensure `gmx` (non-MPI) is accessible from your environment path.
-* Always include `charmm36_ljpme-jul2022.ff` in your project directory.
-* Run inside `tmux` to prevent job interruption.
-* Use `2A_AutoGMXrestart.py` for long simulations to enable checkpoint recovery.
-* Prefer GPU-enabled environments for production runs.
-* Annotate all run details (ligand, time, GPU, date) in `mdrun.log` for reproducibility.
+- Ensure `gmx` is available in your active environment  
+- Keep `charmm36_ljpme-jul2022.ff` in the project root  
+- Separate setup (`cgenff`) and MD (`mdanalysis`) environments  
+- Retain logs and parameter files for reproducibility
 
 ---
 
 ## 🧬 Citation
 
-If you use this pipeline in your work, please cite:
+If you use PyMACS in academic work, please cite:
 
-> Schulz, J.-M. *Automated GROMACS MD Workflow for Multi-Protein and PROTAC Systems* (University of Miami, 2025).
+> Schulz, J.-M. *PyMACS: A Modular GROMACS Automation and Analysis Suite* (University of Miami, 2026).
+
+---
+
+## 📬 Contact
+
+For questions, issues, or contributions, please open a GitHub Issue or contact the jmschulz@med.miami.edu directly.
+
