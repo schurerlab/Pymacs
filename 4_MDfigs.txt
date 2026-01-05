@@ -1,0 +1,207 @@
+============================================================
+PROTAC MD ANALYSIS — FULL FIGURE CAPTION SET (STYLED FORMAT)
+============================================================
+
+For each entry below:
+
+* Line 1: Exact filename (used by Python to match figures)
+* Line 2: "Figure N. Title" (used as the figure title in PDFs)
+* Line 3+: Long-form, expanded scientific description
+
+---
+
+Protein_RMSD.png
+Figure 1. Global Protein RMSD Over Time
+This figure presents the backbone root-mean-square deviation (RMSD) of the protein throughout the molecular dynamics simulation. RMSD reflects the average positional shift of backbone atoms compared to the initial reference structure. A low, steady RMSD indicates structural stability and equilibration, while progressive increases may signify conformational drift, domain movement, or gradual unfolding. Sharp spikes often correspond to flexible loops or transient motions. This plot serves as a primary metric for verifying simulation stability and assessing major structural transitions.
+
+---
+
+{LIG}_Ligand_RMSD.png
+Figure 2. Ligand Positional Stability (Ligand RMSD)
+This figure measures how the ligand’s overall bound pose changes relative to its starting position. Ligand RMSD is computed over all heavy atoms, providing a clear quantitative measure of binding stability. A consistently low RMSD indicates the ligand remains securely positioned within the binding pocket. Moderate fluctuations may reflect natural breathing motions of the protein or induced-fit adjustments. Sudden increases or long-term drift may suggest partial unbinding or migration within the pocket. This metric helps determine whether the ligand maintains a stable pharmacophore alignment across the trajectory.
+
+---
+
+{LIG}_Ligand_RMSF.png
+Figure 3. Ligand Flexibility Map (Ligand RMSF)
+This figure shows per-atom root-mean-square fluctuation (RMSF) values for the ligand, highlighting internal mobility. RMSF quantifies how much each atom oscillates around its average position. High RMSF values often correspond to solvent-exposed substituents, rotatable bonds, or flexible tails, while low RMSF values reflect rigid aromatic cores or functional groups tightly engaged in stable interactions. This analysis helps identify which portions of the ligand are most dynamically adaptable and may influence binding affinity or specificity.
+
+---
+
+RMSD_{PROTEIN_NAME}.png
+Figure 4. Structural Stability of Individual Protein Chains
+This plot isolates RMSD for each protein chain independently, allowing detailed comparison of their structural behavior. In multichain systems or ternary complexes, chains may experience different environments, constraints, or degrees of ligand influence. A stable chain shows low RMSD, while a rising or fluctuating RMSD may indicate hinge motions, inter-domain rearrangements, or partial unfolding. This chain-level decomposition reveals asymmetry in protein flexibility and helps interpret mechanism-specific motions (e.g., PROTAC-induced reshaping).
+
+---
+
+RMSF_{PROTEIN_NAME}_per_residue_contacts.png
+Figure 5. Residue-Level Flexibility and Persistent Ligand Contacts (RMSF)
+
+This figure shows the root-mean-square fluctuation (RMSF) of individual protein residues for the analyzed chain, calculated from the Cα atoms over the molecular dynamics trajectory. RMSF quantifies the extent of positional fluctuations around each residue’s average structure, with higher values typically corresponding to flexible loops, termini, or regulatory regions, and lower values indicating more rigid secondary structure elements such as α-helices or β-sheets. Residues that maintain persistent contacts with the ligand are highlighted by green vertical markers. These markers extend from the baseline up to the RMSF value of the corresponding residue and indicate residues that contact the ligand for at least the specified fraction of simulation frames (≥ X%, where X is the user-defined contact persistence threshold). The absence of a continuous line across regions with missing residues reflects gaps in residue numbering or unresolved structural segments rather than continuous flexibility. Together, this visualization integrates residue-level dynamics with ligand contact persistence, enabling identification of flexible or rigid regions that consistently engage the ligand and may contribute to binding stability, allosteric communication, or functional regulation.
+---
+
+{LIG}_Complex_RMSD_Overlay.png
+Figure 6. Structural Stability of the Binding Interface
+This figure tracks RMSD for the ligand together with residues forming the binding interface (typically identified as residues within a specified distance cutoff). This targeted RMSD isolates the region most relevant to affinity and binding mode stability. A stable interface RMSD suggests robust ligand engagement and well-maintained interaction geometry. Increasing RMSD may reflect side-chain reorientation, induced-fit adjustments, or pocket breathing. This plot is especially important when evaluating whether docking predictions are preserved throughout MD.
+
+---
+
+FullComplex_RMSD.png
+Figure 7. Global RMSD of the Full Protein–Ligand Complex
+This plot reports RMSD for the entire simulated system, including all protein chains and the ligand. It captures global changes such as domain motions, multimer rearrangements, or cooperative structural shifts. Stable full-system RMSD indicates overall convergence and equilibrium. Significant increases may reflect large-scale breathing motions or long-timescale adaptations. This metric complements chain-level and interface-level RMSD to provide a full-system perspective on structural dynamics.
+
+---
+
+Radius_of_Gyration_Overlay.png
+Figure 8. Global compactness dynamics of the protein–ligand complex measured by radius of gyration.
+Time evolution of the radius of gyration (Rg) for the protein backbone (blue), bound ligand (red), and full protein–ligand complex (green) over the course of the molecular dynamics simulation. Protein Rg reports on global folding stability and breathing motions, while ligand Rg captures intramolecular collapse or extension during binding. The complex Rg reflects overall assembly compactness. Together, these metrics provide a complementary view of conformational stability and structural organization beyond RMSD-based analyses.
+
+---
+
+DSSP_Heatmap.png
+Figure 9. Secondary Structure Evolution Over Time (DSSP Heatmap)
+This heatmap visualizes how secondary structure elements—α-helices, β-sheets, and coil regions—change throughout the simulation. Each row corresponds to a residue and each column to a timepoint. Continuous colored bands indicate stable structural motifs, while transitions or disruptions signal unfolding events, local melting, or structural rearrangement. DSSP analysis is particularly valuable for identifying whether ligand binding stabilizes or destabilizes specific secondary structure elements.
+
+---
+
+SSE_Fractions.png
+Figure 10. Global Secondary Structure Composition
+This bar plot shows the proportion of residues adopting helix, sheet, or coil conformations across the trajectory. Comparing these fractions across simulation intervals can reveal global unfolding, tightening, or reorganization events. Stability in overall composition suggests preserved structural integrity, while shifts may indicate progressive conformational change, ligand-induced stabilization, or partial disordering.
+
+---
+
+DSSP_chain_{CHAIN}_heatmap.png
+Figure 11. Chain-Resolved Secondary Structure Dynamics
+This figure maps secondary structure changes over time for an individual protein chain. It clarifies whether structural transitions observed in the global analysis originate from a specific chain or are distributed across the complex. Chain-specific DSSP patterns help identify asymmetric responses to ligand binding, cooperative structural shifts, or localized unfolding. It is essential for interpreting multichain systems where each subunit may experience a distinct environment.
+
+---
+
+This figure shows how secondary structure evolves for a single protein chain. Comparing chains helps identify whether structural changes are localized or collective, particularly in multimeric complexes.
+
+---
+
+Residue_Helix_Persistence.png 
+Figure 12a. Residue-Level Structural Persistence Metrics
+These three figures provide a residue-by-residue analysis of how stable each secondary structure element remains throughout the simulation. "Persistence" refers to the proportion of simulation frames in which a residue maintains a particular structural state—helix, sheet, or flexible/coil. High helix or sheet persistence indicates residues forming part of structurally rigid cores, scaffolding regions, or stable interaction interfaces. Low persistence or dominance of flexibility suggests regions undergoing conformational changes, acting as hinges, or responding to ligand binding. Together, these plots show which parts of the protein remain structurally anchored and which regions participate in adaptive rearrangements.
+
+---
+
+Residue_Sheet_Persistence.png 
+Figure 12b. Residue-Level Structural Persistence Metrics
+These three figures provide a residue-by-residue analysis of how stable each secondary structure element remains throughout the simulation. "Persistence" refers to the proportion of simulation frames in which a residue maintains a particular structural state—helix, sheet, or flexible/coil. High helix or sheet persistence indicates residues forming part of structurally rigid cores, scaffolding regions, or stable interaction interfaces. Low persistence or dominance of flexibility suggests regions undergoing conformational changes, acting as hinges, or responding to ligand binding. Together, these plots show which parts of the protein remain structurally anchored and which regions participate in adaptive rearrangements.
+
+---
+
+Residue_Flexibility.png
+Figure 12c. Residue-Level Structural Persistence Metrics
+These three figures provide a residue-by-residue analysis of how stable each secondary structure element remains throughout the simulation. "Persistence" refers to the proportion of simulation frames in which a residue maintains a particular structural state—helix, sheet, or flexible/coil. High helix or sheet persistence indicates residues forming part of structurally rigid cores, scaffolding regions, or stable interaction interfaces. Low persistence or dominance of flexibility suggests regions undergoing conformational changes, acting as hinges, or responding to ligand binding. Together, these plots show which parts of the protein remain structurally anchored and which regions participate in adaptive rearrangements.
+
+---
+
+{LIG}_contact_map_residue_time.png
+Figure 13. Time-Resolved Residue–Ligand Contact Map
+This heatmap provides a detailed, frame-by-frame visualization of which protein residues are in contact with the ligand throughout the simulation. Each row corresponds to a residue, and each column corresponds to a timepoint (or frame). Dark, continuous horizontal bands signify residues that maintain stable, persistent interactions—these often serve as structural anchors that hold the ligand securely in place. More fragmented, intermittent bands reveal transient or exploratory contacts, typically arising from local fluctuations, induced-fit motions, or momentary steric encounters. The map offers an intuitive temporal overview of how the binding interface evolves, helping identify when the ligand becomes firmly seated, when contacts reorganize, and whether any interaction pathways emerge or disappear over time.
+
+---
+
+{LIG}_contact_frequency_filtered.png
+Figure 14. Ranked Residue Contact Frequencies
+This bar chart ranks residues based on how frequently they form interactions with the ligand across all simulation frames. Residues with high contact frequency are typically the structural and chemical pillars of binding—they consistently stabilize the ligand and often contribute the most to affinity. Lower-frequency residues may represent transient contributors, residues involved in initial docking poses, or flexible neighboring regions that occasionally make contact. This figure is especially useful for rational mutagenesis, hotspot identification, and prioritizing residues for further structural or biochemical validation.
+
+---
+
+interaction_stacked_normalized.png
+Figure 15. Normalized Distribution of Interaction Types
+This figure displays the overall proportions of major interaction classes formed between the ligand and protein during the simulation, normalized to sum to 1. Interaction types include hydrogen bonds (directional, polar contacts), hydrophobic interactions (nonpolar packing), ionic interactions (electrostatic attractions), and water bridges (water-mediated hydrogen bonds). By summarizing these categories, the figure reveals the chemical strategy used by the protein to recognize and stabilize the ligand, helping distinguish binding modes dominated by electrostatics, hydrophobic packing, or mixed contributions.
+
+---
+
+interaction_grouped_normalized.png
+Figure 16. Grouped Interaction Category Breakdown
+This figure expands on the previous interaction composition by grouping similar interaction classes (e.g., polar vs. nonpolar interactions) to highlight higher-level patterns in ligand recognition. By collapsing fine-grained categories into conceptual groups, the figure clarifies whether the binding environment favors hydrophobic enclosure, polar complementarity, ionic anchoring, or hybrid strategies. This broader view is helpful when comparing multiple ligands or simulation conditions, providing a clean summary of binding chemistry.
+
+---
+
+{LIG}_interaction_timeline.png
+Figure 17. Time-Resolved Interaction State Heatmap
+This heatmap depicts the temporal evolution of ligand–protein interactions across the simulation. Rows correspond to residues and columns to simulation time. Color encodes the dominant interaction type present at each time point, using a priority scheme to resolve simultaneous contacts. Early transient interactions reflect initial docking stabilization, while persistent late-stage interactions define the final bound pose. This representation highlights dynamic competition between residues, cooperative binding events, and interaction reorganization during induced-fit binding.
+---
+
+binding_importance_ranking.png
+Figure 18. Ranking of Residues by Binding Importance
+This figure integrates multiple metrics—interaction frequency, persistence, type composition, and geometric tightness—to generate a ranked list of residues based on their overall contribution to ligand binding. Top-ranked residues typically act as anchors, often forming strong, stable interactions essential for affinity and selectivity. Lower-ranked residues may assist transiently or contribute indirectly. This ranking is critical for designing mutations, identifying hotspots, and evaluating whether different ligands exploit similar binding strategies.
+
+---
+
+{LIG}_persistence_vs_distance.png
+Figure 19. Interaction Persistence vs Distance Analysis
+This scatter plot compares each residue’s average interaction distance (a measure of spatial closeness) with its persistence (fraction of simulation time the interaction is present). Interactions that are both short-distance and long-lived usually represent strong, structurally meaningful contacts characteristic of high-affinity binding. Conversely, long-distance or low-persistence interactions tend to be weak, transient, or geometrically unstable. This analysis helps distinguish strong anchor residues from peripheral contributors and reveals geometric signatures of binding strength.
+
+---
+
+pie_charts/pie_{Residue}.png
+Figure 20. Per-Residue Interaction Type Pie Chart
+Each pie chart provides a residue-specific breakdown of interaction types formed with the ligand. The chart highlights whether a residue contributes primarily via hydrogen bonding, hydrophobic packing, ionic attraction, water bridges, or a mixture of these. This level of resolution helps dissect the chemical role of each residue—whether it acts as a polar stabilizer, hydrophobic anchor, electrostatic clamp, or multifunctional contact point.
+
+---
+
+distance_distributions/dist_{Residue}.png
+Figure 21. Interaction Distance Distribution for Individual Residues
+These histograms visualize how the interaction distances for a given residue fluctuate across the simulation. A narrow peak indicates a stable, well-defined geometry—often characteristic of strong hydrogen bonds or tight hydrophobic packing. Broader or multi-peaked distributions reveal flexibility, multiple binding modes, or shifting interaction geometries. This figure helps pinpoint residues with rigid, reliable contacts versus those participating in adaptive or transient interactions.
+
+---
+
+interaction_degree_distribution.png
+Figure 22. Residue–Ligand Contact Persistence Distribution
+
+This figure shows the temporal persistence of ligand contacts for each protein residue during the simulation. For every residue, the interaction degree corresponds to the number of simulation frames in which that residue forms at least one contact with the ligand, independent of the number or type of contacts within a frame. Each histogram bin therefore represents how many residues maintain ligand contact for a given fraction of the trajectory. Residues with high contact persistence remain engaged with the ligand across most of the simulation and likely define the core binding pocket, whereas residues with lower persistence contribute more transient or conformationally dependent interactions. This analysis provides a time-resolved view of which residues consistently stabilize the ligand versus those that interact only intermittently. Importantly, this metric reflects interaction duration over time rather than interaction strength or contact multiplicity.
+---
+
+Composite_Distance_Distributions.png
+Figure 23. Multi-Residue Interaction Distance Comparison
+This figure overlays the interaction distance distributions of several residues into a single composite plot, allowing for direct comparison of their geometric behavior. Each curve represents how frequently a particular interaction distance occurs during the simulation for one residue. Tight, narrow peaks indicate residues that maintain a stable, well-defined interaction geometry, whereas broader or multimodal curves reveal flexibility or multiple competing interaction states. This comparison highlights patterns such as clusters of residues with similar binding geometries or outliers that deviate markedly from the rest.
+
+---
+
+interaction_type_violin.png
+Figure 24. Violin Plots of Interaction Distance by Type
+This figure presents violin plots for different classes of ligand–protein interactions—such as hydrogen bonds, hydrophobic contacts, ionic interactions, and water bridges—illustrating the full distribution of distances for each category. The width of each violin reflects how frequently distances occur at each value, while the overall shape captures the spread and variability of the interaction geometry. Narrow, elongated violins indicate geometrically constrained interactions (commonly seen in hydrogen bonds), whereas broader violins suggest flexible or highly variable interactions. This visualization provides an intuitive, side-by-side comparison of the structural stability and variability across different interaction types.
+
+---
+
+{LIG}_interaction_event_timeline.png
+Figure 25. Interaction Event Timeline
+This event-level timeline depicts the lifetimes of individual residue–ligand interactions across the simulation. Each horizontal segment represents a continuous interaction event, colored by interaction type. Breaks between segments indicate contact loss or replacement by a different interaction mode. Early transient events reflect initial docking stabilization, while long-lived late-stage interactions define the final bound pose. This representation exposes dynamic competition, cooperative binding, and induced-fit rearrangements underlying interaction network maturation.
+---
+
+NETWORX/{LIG}_bar.png
+Figure 26. NETWORX Residue Interaction Summary
+This bar plot provides a visually intuitive summary of the interaction landscape for each residue, as extracted from the NETWORX pipeline. Each bar is subdivided by interaction type, illustrating the relative contribution of hydrogen bonding, hydrophobic contacts, ionic interactions, and water-mediated stabilization. Only interactions that persist above a user-defined minimum fraction of simulation frames are included, ensuring that the visualization emphasizes reproducible and structurally meaningful contacts rather than rare or stochastic events. Residues with tall bars and multiple colored segments play diverse and influential roles in ligand binding, whereas residues with shorter or single-color bars represent more specialized or transient interaction modes. This figure is particularly useful for identifying dominant contributors to ligand recognition, comparing residues with similar functional roles, and guiding targeted mutagenesis or structure-based optimization.
+---
+
+NETWORX/{LIG}_expanded_clean.png
+Figure 27. Expanded Ligand–Protein Interaction Network Highlighting Dominant Contacts
+This figure shows an expanded ligand–protein interaction network generated by NETWORX in which, for each protein residue, only the most prevalent interaction type observed across the simulation is displayed. The ligand is rendered at the center using a preserved 2D molecular layout with individual atoms colored by element, while interacting residues are arranged radially around the ligand and colored by biochemical class (hydrophobic, polar, positive, or negative). Curved edges connect ligand atoms to residues and encode the dominant interaction type (e.g., hydrophobic contact, hydrogen bond, ionic interaction, or water bridge) using line style and color, with edge labels indicating the fraction of simulation frames in which that dominant interaction occurs. By collapsing multiple interaction modes into a single representative contact per residue, this visualization emphasizes the primary stabilizing interactions within the binding pocket while intentionally masking less frequent or transient contacts, such as short-lived hydrogen bonds that occur below the prevalence of stronger or more persistent interaction types.
+
+
+---
+
+NETWORX/{LIG}_expanded.png 
+Figure 28. Expanded NETWORX Network Layouts
+This figure presents a fully expanded ligand–protein interaction network generated by NETWORX, integrating per-frame contact data to visualize both the chemical structure of the ligand and its dynamic interaction landscape with surrounding protein residues. The ligand is shown at the center using a preserved 2D molecular layout, with individual ligand atoms retained and colored by element. Protein residues are arranged radially around the ligand using an adaptive, non-overlapping layout, and are colored by biochemical class (hydrophobic, polar, positive, or negative). Curved edges connect ligand atoms to interacting residues and encode interaction type (hydrogen bonds, hydrophobic contacts, ionic interactions, and water bridges) via color and line style, while edge labels report the fraction of simulation frames in which each interaction occurs. This integrated representation enables direct identification of dominant binding residues, interaction hotspots, and the chemical determinants of binding, providing a comprehensive view of ligand recognition and stabilization within the binding pocket.
+
+---
+
+{LIG}_SSE_vs_Contacts_FULL.png
+Figure 29. Coupled Secondary Structure and Interaction Changes
+This integrative figure overlays the evolution of protein secondary structure (derived from DSSP) with simultaneous changes in ligand interaction patterns. By aligning these two data streams, the figure reveals whether shifts in helices, sheets, or flexible coil regions correlate with the formation, loss, or reorganization of ligand‑residue contacts. Such correlations can point to functionally significant conformational events—e.g., a helix unwinding that exposes new contact sites, or a β‑sheet stabilizing after forming sustained interactions. This combined view allows researchers to infer mechanistic pathways, identify communication between structural rearrangements and binding behavior, and determine whether the ligand induces structural adaptation (induced fit) or passively follows pre‑existing conformational transitions.
+
+
+---
+
+dist_{Residue}.png
+Figure 30x. Interaction Distance Distribution for Individual Residues (Universal Caption)
+This universal caption applies to all residue-specific distance distribution plots. Each histogram shows how the interaction distance between an individual residue and the ligand varies across the simulation. Narrow, sharply defined peaks indicate stable and persistent interactions—commonly seen in strong hydrogen bonds or tight hydrophobic packing. Broader or multimodal distributions signify flexible or transient contacts sampling multiple conformational states. These histograms help distinguish structurally anchored residues from dynamically adaptive ones, revealing how each contact behaves within the evolving binding interface.
+
+---
+# END OF CAPTIONS
