@@ -181,6 +181,39 @@ import subprocess
 import os
 
 
+def detect_ligands_from_gro(gro_file="em.gro"):
+    """
+    Detect non-protein, non-solvent ligands from a GROMACS .gro file.
+    Returns a sorted list of candidate resnames.
+    """
+    if not os.path.exists(gro_file):
+        return []
+
+    solvent = {"SOL", "WAT", "HOH"}
+    ions = {"NA", "CL", "K", "CA", "MG", "ZN"}
+    protein_residues = {
+        "ALA","ARG","ASN","ASP","CYS","GLU","GLN","GLY",
+        "HIS","ILE","LEU","LYS","MET","PHE","PRO","SER",
+        "THR","TRP","TYR","VAL"
+    }
+
+    ligands = set()
+
+    with open(gro_file) as f:
+        lines = f.readlines()[2:-1]  # skip header + box
+        for line in lines:
+            resname = line[5:10].strip().upper()
+            if (
+                resname not in solvent
+                and resname not in ions
+                and resname not in protein_residues
+            ):
+                ligands.add(resname)
+
+    return sorted(ligands)
+
+
+
 
 def run_command_check_rc(command, cwd=None, input_text=None):
     """
@@ -1182,15 +1215,39 @@ if __name__ == "__main__":
     ligand_code = None
     if simulation_type.lower() in ["ligand:protein", "ligand", "protac"]:
 
-
+        # 1️⃣ CLI override always wins
         if args.ligand:
             ligand_code = args.ligand.upper()
+
         else:
-            ligand_code_input = input("Enter the 3-letter ligand code (e.g., PTC): ").strip().upper()
-            if len(ligand_code_input) == 0:
-                print("❌ Ligand code is required for this simulation type.")
-                exit(1)
-            ligand_code = ligand_code_input
+            detected = detect_ligands_from_gro("em.gro")
+
+            # 2️⃣ Exactly one ligand → auto-prompt
+            if len(detected) == 1:
+                lig = detected[0]
+                if args.headless:
+                    ligand_code = lig
+                    print(f"🤖 Headless mode: auto-selected ligand {lig}")
+                else:
+                    use = input(f"Detected ligand '{lig}'. Use this ligand? [Y/n]: ").strip().lower()
+                    ligand_code = lig if use in ["", "y", "yes"] else None
+
+            # 3️⃣ Multiple ligands → explicit choice
+            elif len(detected) > 1:
+                print("\nDetected multiple ligands:")
+                for i, lig in enumerate(detected, 1):
+                    print(f"  [{i}] {lig}")
+                choice = input("Select ligand by number or press ENTER to type manually: ").strip()
+                if choice.isdigit() and 1 <= int(choice) <= len(detected):
+                    ligand_code = detected[int(choice) - 1]
+
+            # 4️⃣ Fallback → manual input
+            if not ligand_code:
+                ligand_code = input("Enter the 3-letter ligand code: ").strip().upper()
+                if not ligand_code:
+                    print("❌ Ligand code is required for this simulation type.")
+                    exit(1)
+
 
     # Production length
     if args.ns is not None:
