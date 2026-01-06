@@ -903,7 +903,7 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
 
     nvt_cmd = f"gmx mdrun -v -deffnm nvt -pin on -pinoffset {pin_offset} -ntmpi 1 -ntomp {available_threads}"
     if gpu_id >= 0:
-        nvt_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu -update gpu"
+        nvt_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu"
         print(f"⚙️  Using GPU {gpu_id} for NVT equilibration (compute mode: {args.compute}).")
     else:
         print("⚙️  No GPU selected; running NVT on CPU only.")
@@ -925,7 +925,7 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
 
     npt_cmd = f"gmx mdrun -v -deffnm npt -pin on -pinoffset {pin_offset} -ntmpi 1 -ntomp {available_threads}"
     if gpu_id >= 0:
-        npt_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu -update gpu"
+        npt_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu"
         print(f"⚙️  Using GPU {gpu_id} for NPT equilibration (compute mode: {args.compute}).")
     else:
         print("⚙️  No GPU selected; running NPT on CPU only.")
@@ -947,7 +947,8 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
 
     md_cmd = f"gmx mdrun -v -deffnm md_0_1 -pin on -pinoffset {pin_offset} -ntmpi 1 -ntomp {available_threads}"
     if gpu_id >= 0:
-        md_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu -update gpu"
+        md_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu"
+
         print(f"⚙️  Using GPU {gpu_id} for production MD (compute mode: {args.compute}).")
     else:
         print("⚙️  No GPU selected; running production MD on CPU only.")
