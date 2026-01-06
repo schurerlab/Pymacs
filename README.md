@@ -27,9 +27,7 @@ PyMACS is intended for **computational structural biology**, **drug discovery**,
 ## 🧩 Repository Structure
 
 ```
-## 🧩 Repository Structure
 
-```
 Pymacs/
 │
 ├── 1_AutomateGromacs.py        # System preparation & topology generation
