@@ -115,17 +115,17 @@ In this case, users must manually:
 
 To ensure correct ligand detection and topology generation:
 
-- The ligand **residue name** in the PDB (three-letter code, e.g. `DR7`) **must match exactly**  
+- The ligand **residue name** in the PDB (three-letter code, e.g. `A1D`) **must match exactly**  
 - The MOL2 file **must be named**:
 
 ```
-DR7.cgenff.mol2
+A1D.cgenff.mol2
 ```
 
 - The CHARMM stream file **must be named**:
 
 ```
-DR7.str
+A1D.str
 ```
 
 - The uploaded ligand structure **must contain hydrogens**  
@@ -279,6 +279,7 @@ If you use PyMACS in academic work, please cite:
 ## 📬 Contact
 
 For questions, issues, or contributions, please open a GitHub Issue or contact the jmschulz@med.miami.edu directly.
+
 
 
 
