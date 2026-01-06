@@ -27,6 +27,9 @@ PyMACS is intended for **computational structural biology**, **drug discovery**,
 ## 🧩 Repository Structure
 
 ```
+## 🧩 Repository Structure
+
+```
 Pymacs/
 │
 ├── 1_AutomateGromacs.py        # System preparation & topology generation
@@ -50,6 +53,14 @@ Pymacs/
 ├── environment_cgenff.yml      # Conda env: ligand parameterization
 ├── environment_mdanalysis.yml  # Conda env: MD & analysis
 ├── recreate_envs.sh            # Convenience script for env recreation
+│
+├── Example/                    # Reproducible example system (HRP-2 PWWP + CPD32)
+│   ├── CPD32_9G94.pdb           # Crystal structure 9G94
+│   └── A1D/                     # CGenFF ligand parameters (compound 32)
+│       ├── A1D.cgenff.mol2
+│       ├── A1D.mol2
+│       ├── A1D.str
+│       └── A1D.err
 │
 └── README.md
 ```
@@ -267,6 +278,170 @@ python 4PDF4MD.py
 - Retain logs and parameter files for reproducibility
 
 ---
+
+
+## 🧭 Guided Example Walkthrough (Interactive Template)
+
+This section provides a complete, reproducible walkthrough of the PyMACS pipeline using the included example system (HRP-2 PWWP domain bound to compound 32; `CPD32_9G94.pdb`, ligand code `A1D`). The steps below mirror the **actual interactive prompts** encountered when running each script, allowing users to follow along exactly or adapt the workflow for their own systems.
+
+---
+
+### 📁 Step 0 — Prepare the Working Directory
+
+Create a clean working directory and copy all required files into a single location. All PyMACS scripts, parameter files, and inputs are expected to reside in the same directory during execution.
+
+```bash
+mkdir MD_Example
+cd MD_Example
+
+cp ../Pymacs/*.py .
+cp ../Pymacs/*.mdp .
+cp -r ../Pymacs/charmm36_ljpme-jul2022.ff .
+cp ../Pymacs/Example/CPD32_9G94.pdb .
+cp -r ../Pymacs/Example/A1D .
+```
+
+This directory now contains:
+
+* The crystal structure (`CPD32_9G94.pdb`)
+* Pre-generated CGenFF ligand parameters (`A1D.cgenff.mol2`, `A1D.str`, etc.)
+* All PyMACS scripts and MDP templates
+* The CHARMM36/LJ-PME force field directory
+
+---
+
+### 🧱 Step 1 — System Preparation & Parameterization (`1_AutomateGromacs.py`)
+
+Run the preparation script in interactive mode:
+
+```bash
+python 1_AutomateGromacs.py
+```
+
+Typical prompts and recommended responses for the example system are shown below.
+
+**Select input structure**
+
+```
+Available PDB files:
+1) CPD32_9G94.pdb
+
+Select a PDB file by number: 1
+```
+
+**Ligand detection and confirmation**
+
+```
+Detected ligand candidates: A1D
+Use A1D as ligand? [Y/n]: Y
+```
+
+**Chain naming**
+
+```
+Detected chains: A
+Enter descriptive name for chain A: LEDGF
+```
+
+**pH and structure fixing**
+
+```
+Enter pH for protonation [default 7.4]:
+Fix missing residues and atoms? [Y/n]: Y
+```
+
+**CGenFF handling**
+
+* If SILCSBio/CGenFF is available in the PATH, the ligand is parameterized automatically.
+* If not, the script will detect the pre-generated `A1D.cgenff.mol2` and `A1D.str` files and proceed without reparameterization.
+
+At completion, the directory contains a fully solvated and ionized system, a master topology (`topol.top`), an index file (`index.ndx`), and an energy-minimization-ready input (`em.tpr`).
+
+---
+
+### ⚙️ Step 2 — Energy Minimization, Equilibration & Production (`2_AutomateGromacs.py`)
+
+Run the simulation driver:
+
+```bash
+python 2_AutomateGromacs.py
+```
+
+The script executes the following stages sequentially:
+
+* Steepest-descent energy minimization
+* NVT equilibration with positional restraints
+* NPT equilibration with pressure coupling and gradual restraint release
+* Production MD for the user-defined simulation length
+
+Thread count and GPU usage are auto-detected, with interactive confirmation when applicable. Checkpoint files are written automatically, allowing interrupted simulations to be restarted safely.
+
+Successful completion produces the final trajectory (`md_0_1.xtc`), topology (`md_0_1.tpr`), and associated energy and log files.
+
+---
+
+### 📊 Step 3 — Trajectory Analysis & Interaction Mapping (`3A_AutomateGromacs.py`)
+
+Run the analysis script:
+
+```bash
+python 3A_AutomateGromacs.py
+```
+
+Key interactive prompts include:
+
+**Ligand selection**
+
+```
+Detected ligand candidate: A1D
+Use A1D as ligand? [Y/n]: Y
+```
+
+**Compound display name**
+
+```
+Enter compound display name (or press ENTER to use resname): CPD32
+```
+
+**Thread configuration**
+
+```
+Detected 24 CPU threads available
+Enter number of threads to use [ENTER = auto]:
+```
+
+The script automatically:
+
+* Recenters the trajectory and extracts a ligand-focused subset
+* Identifies the dynamic binding pocket (5 Å cutoff)
+* Computes global and per-chain RMSD/RMSF
+* Quantifies ligand stability and radius of gyration
+* Generates secondary-structure timelines (DSSP)
+* Builds residue-level contact maps and interaction frequency plots
+
+All results are written to the `Analysis_Results/` directory.
+
+---
+
+### 🧬 Step 4 — Interaction Networks & Reporting (`3B_NETWORX.py`, `4PDF4MD.py`)
+
+Interaction network diagrams are generated automatically at the end of Step 3 or can be rerun independently. Optional prompts control layout geometry and edge visibility.
+
+Finally, assemble all plots into a single report:
+
+```bash
+python 4PDF4MD.py
+```
+
+This produces a multi-panel, publication-ready PDF summarizing structural stability, ligand dynamics, interaction persistence, and binding-site organization.
+
+---
+
+### ✅ Outcome
+
+Following this walkthrough yields a fully reproducible MD simulation and analysis of the HRP-2 PWWP–CPD32 complex, serving as a validated reference for adapting PyMACS to new protein–ligand or multi-component systems.
+
+
 
 ## 🧬 Citation
 
