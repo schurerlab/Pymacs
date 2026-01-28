@@ -165,6 +165,76 @@ def parse_args():
     return args
 
 
+GPU_PROFILES = [
+    # Profile 1: full GPU offload (modern GPUs)
+    {
+        "name": "gpu_full",
+        "flags": "-nb gpu -pme gpu -bonded gpu -update gpu"
+    },
+    # Profile 2: conservative GPU (older GPUs)
+    {
+        "name": "gpu_nb_only",
+        "flags": "-nb gpu"
+    },
+]
+
+CPU_PROFILE = {
+    "name": "cpu_only",
+    "flags": ""
+}
+
+def run_mdrun_with_fallback(
+    base_cmd,
+    cwd,
+    pin_offset,
+    threads,
+    gpu_id,
+    use_gpu=True
+):
+    """
+    Try GPU profiles in order, fall back to CPU if all GPU attempts fail.
+    """
+
+    # --------------------
+    # GPU attempts
+    # --------------------
+    if use_gpu and gpu_id >= 0:
+        for profile in GPU_PROFILES:
+            cmd = (
+                f"{base_cmd} "
+                f"-pin on -pinoffset {pin_offset} "
+                f"-ntmpi 1 -ntomp {threads} "
+                f"-gpu_id 0 {profile['flags']}"
+            )
+
+            print(f"\n🚀 Trying {profile['name']} → {cmd}")
+
+            rc = run_command_check_rc(cmd, cwd=cwd)
+            if rc == 0:
+                print(f"✅ Success using {profile['name']}")
+                return  # success → exit function
+
+            print(f"⚠️ {profile['name']} failed, trying next fallback...")
+
+    # --------------------
+    # CPU fallback
+    # --------------------
+    print("\n🧯 Falling back to CPU-only execution")
+
+    cpu_cmd = (
+        f"{base_cmd} "
+        f"-pin on -pinoffset {pin_offset} "
+        f"-ntmpi 1 -ntomp {threads}"
+    )
+
+    rc = run_command_check_rc(cpu_cmd, cwd=cwd)
+    if rc != 0:
+        print("❌ CPU fallback also failed. Aborting.")
+        exit(rc)
+
+    print("✅ CPU-only execution successful")
+
+
 
 def run_command(command, cwd=None, input_text=None):
     """Runs a shell command in the given directory and exits on failure."""
@@ -205,34 +275,6 @@ def run_command_check_rc(command, cwd=None, input_text=None):
 
 
 
-def sync_mdp_templates(run_dir, mdp_dir="MDPs"):
-    """
-    Force-sync MDP templates into the working directory.
-
-    Behavior:
-    - ALWAYS overwrites local em.mdp, ions.mdp, nvt.mdp, npt.mdp, md.mdp
-    - Treats MDPs/ as the single source of truth
-    """
-
-    required_mdps = ["em.mdp", "ions.mdp", "nvt.mdp", "npt.mdp", "md.mdp"]
-
-    template_path = os.path.join(run_dir, mdp_dir)
-    if not os.path.isdir(template_path):
-        raise FileNotFoundError(
-            f"❌ Required MDP template directory not found: {template_path}"
-        )
-
-    print("📄 Overwriting MDPs from template directory:")
-
-    for mdp in required_mdps:
-        src = os.path.join(template_path, mdp)
-        dst = os.path.join(run_dir, mdp)
-
-        if not os.path.exists(src):
-            raise FileNotFoundError(f"❌ Missing template file: {src}")
-
-        shutil.copy2(src, dst)
-        print(f"  🔁 {mdp} ← MDPs/{mdp}")
 
 
 def run_command_cpu(command, cwd=None, input_text=None):
@@ -403,6 +445,24 @@ def print_numa_summary():
     for i, name in enumerate(gpu_list):
         cores = get_numa_cores_for_gpu(i)
         print(f"  GPU {i} ({name.strip()}): cores {cores[0]}–{cores[-1]} ({len(cores)} cores)")
+
+
+
+def set_gpu_env(gpu_id, threads):
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    os.environ["OMP_NUM_THREADS"] = str(threads)
+
+def clear_gpu_env():
+    for k in [
+        "CUDA_VISIBLE_DEVICES",
+        "GMX_FORCE_GPU_ID",
+        "GMX_GPU_DD_COMMS",
+        "GMX_GPU_PME_DECOMPOSITION"
+    ]:
+        os.environ.pop(k, None)
+
+
 
 
 def get_numa_cores_for_gpu(gpu_id: int):
@@ -596,12 +656,6 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
     print(f"   • OMP_NUM_THREADS={available_threads}")
 
 
-    # ============================================================
-    # 🧩 PRE-STEP — Force-sync MDP templates
-    # ============================================================
-
-    sync_mdp_templates(directory, mdp_dir="MDPs")
-
 
 
 
@@ -685,22 +739,18 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
     # ⚡ 3. Energy Minimization
     # ============================================================
     print("\n⚡ [STEP 3] Starting energy minimization ...")
-    em_cmd = (
-        f"gmx mdrun -v -deffnm em -pin on -pinoffset {pin_offset} "
-        f"-ntmpi 1 -ntomp {available_threads}"
+
+    run_mdrun_with_fallback(
+        base_cmd="gmx mdrun -v -deffnm em",
+        cwd=directory,
+        pin_offset=pin_offset,
+        threads=available_threads,
+        gpu_id=gpu_id,
+        use_gpu=use_gpu
     )
-    if gpu_id >= 0:
-        em_cmd += f" -gpu_id 0 -nb gpu"
-        print(f"⚙️  Using GPU {gpu_id} for EM run (compute mode: {args.compute}).")
-        if use_gpu:
-            run_command_gpu(em_cmd, cwd=directory, gpu_id=gpu_id, threads=available_threads)
-        else:
-            run_command_cpu(em_cmd, cwd=directory)
-    else:
-        print("⚙️  Running EM on CPU (no GPU selected).")
-        run_command_cpu(em_cmd, cwd=directory)
 
     print("✅ Energy minimization complete.\n")
+
 
     
 
@@ -935,67 +985,71 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
     # 🌡️ 6. NVT Equilibration
     # ============================================================
     print("🌡️ [STEP 6] Starting NVT equilibration ...")
+
     run_command_cpu(
         "gmx grompp -f nvt.mdp -c em.gro -r em.gro -p topol.top -n index.ndx -o nvt.tpr -maxwarn 2",
         cwd=directory
     )
 
-    nvt_cmd = f"gmx mdrun -v -deffnm nvt -pin on -pinoffset {pin_offset} -ntmpi 1 -ntomp {available_threads}"
-    if gpu_id >= 0:
-        nvt_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu -update gpu"
-        print(f"⚙️  Using GPU {gpu_id} for NVT equilibration (compute mode: {args.compute}).")
-    else:
-        print("⚙️  No GPU selected; running NVT on CPU only.")
+    # ✅ GPU→GPU-lite→CPU fallback
+    run_mdrun_with_fallback(
+        base_cmd="gmx mdrun -v -deffnm nvt",
+        cwd=directory,
+        pin_offset=pin_offset,
+        threads=available_threads,
+        gpu_id=gpu_id,
+        use_gpu=use_gpu
+    )
 
-    if use_gpu:
-        run_command_gpu(nvt_cmd, cwd=directory, gpu_id=gpu_id, threads=available_threads)
-    else:
-        run_command_cpu(nvt_cmd, cwd=directory)
     print("✅ NVT equilibration complete.\n")
+
 
     # ============================================================
     # 💧 7. NPT Equilibration
     # ============================================================
+    
     print("💧 [STEP 7] Starting NPT equilibration ...")
+
     run_command_cpu(
         "gmx grompp -f npt.mdp -c nvt.gro -r nvt.gro -t nvt.cpt -p topol.top -n index.ndx -o npt.tpr -maxwarn 2",
         cwd=directory
     )
 
-    npt_cmd = f"gmx mdrun -v -deffnm npt -pin on -pinoffset {pin_offset} -ntmpi 1 -ntomp {available_threads}"
-    if gpu_id >= 0:
-        npt_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu -update gpu"
-        print(f"⚙️  Using GPU {gpu_id} for NPT equilibration (compute mode: {args.compute}).")
-    else:
-        print("⚙️  No GPU selected; running NPT on CPU only.")
+    # ✅ GPU→GPU-lite→CPU fallback
+    run_mdrun_with_fallback(
+        base_cmd="gmx mdrun -v -deffnm npt",
+        cwd=directory,
+        pin_offset=pin_offset,
+        threads=available_threads,
+        gpu_id=gpu_id,
+        use_gpu=use_gpu
+    )
 
-    if use_gpu:
-        run_command_gpu(npt_cmd, cwd=directory, gpu_id=gpu_id, threads=available_threads)
-    else:
-        run_command_cpu(npt_cmd, cwd=directory)
     print("✅ NPT equilibration complete.\n")
+
 
     # ============================================================
     # 🧠 8. Production MD
     # ============================================================
     print("🧠 [STEP 8] Starting production MD ...")
+
     run_command_cpu(
         "gmx grompp -f md.mdp -c npt.gro -t npt.cpt -p topol.top -n index.ndx -o md_0_1.tpr -maxwarn 2",
         cwd=directory
     )
 
-    md_cmd = f"gmx mdrun -v -deffnm md_0_1 -pin on -pinoffset {pin_offset} -ntmpi 1 -ntomp {available_threads}"
-    if gpu_id >= 0:
-        md_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu -update gpu"
-        print(f"⚙️  Using GPU {gpu_id} for production MD (compute mode: {args.compute}).")
-    else:
-        print("⚙️  No GPU selected; running production MD on CPU only.")
+    # ✅ GPU→GPU-lite→CPU fallback
+    run_mdrun_with_fallback(
+        base_cmd="gmx mdrun -v -deffnm md_0_1",
+        cwd=directory,
+        pin_offset=pin_offset,
+        threads=available_threads,
+        gpu_id=gpu_id,
+        use_gpu=use_gpu
+    )
 
-    if use_gpu:
-        run_command_gpu(md_cmd, cwd=directory, gpu_id=gpu_id, threads=available_threads)
-    else:
-        run_command_cpu(md_cmd, cwd=directory)
     print("✅ Production MD complete.\n")
+
 
     # ============================================================
     # 🧠 9. Final Trajectory Generation (Delegates to STEP A)
