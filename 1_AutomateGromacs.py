@@ -192,38 +192,179 @@ if args.mode or args.ligand or args.chain_names or args.chain_map:
         log.write(f"{banner}\n")
 
 
-def comment_out_faulty_dihedral(log_text, directory):
+
+def ensure_cgenff_prm_included(topol_path, prm_file, itp_file):
+    with open(topol_path) as f:
+        lines = f.readlines()
+
+    new_lines = []
+    inserted = False
+
+    for line in lines:
+        new_lines.append(line)
+
+        # Insert PRM immediately after forcefield include
+        if "forcefield.itp" in line and not inserted:
+            new_lines.append(f'#include "{prm_file}"\n')
+            inserted = True
+
+    if not inserted:
+        raise RuntimeError("❌ Could not locate forcefield.itp include in topol.top")
+
+    # Ensure ligand ITP is included AFTER prm
+    if itp_file not in "".join(new_lines):
+        new_lines.append(f'#include "{itp_file}"\n')
+
+    with open(topol_path, "w") as f:
+        f.writelines(new_lines)
+
+def regenerate_protein_topology(forcefield="charmm36-mar2019"):
+    """Deletes existing topol.top and reruns pdb2gmx with a specific forcefield."""
+    print(f"🔄 Regenerating protein topology using {forcefield}...")
+    # Clean up old files to avoid conflicts
+    for f in ["topol.top", "posre.itp", "protein_processed.gro"]:
+        if os.path.exists(f):
+            os.remove(f)
+    
+    # This logic assumes the forcefield folder exists in your directory
+    # or is in the GROMACS path.
+    return automate_pdb2gmx(os.getcwd())
+    
+
+
+
+def enforce_gromacs_prm_order(prm_path):
     """
-    Detects and comments out a faulty dihedral entry in the specified .itp file based on grompp error.
-    Returns True if successful, False otherwise.
+    Reorders a CGenFF .prm file into GROMACS-friendly order WITHOUT
+    requiring every possible section, and WITHOUT dropping duplicate sections
+    like repeated [ dihedraltypes ] blocks.
     """
-    # Match error message like:
-    # ERROR 1 [file topol_Protein_chain_A.itp, line 15833]
-    match = re.search(r"ERROR \d+ \[file (\S+), line (\d+)\]", log_text)
-    if not match:
-        print("❌ No faulty dihedral line found in error log.")
-        return False
+    ORDER = ["atomtypes", "bondtypes", "angletypes", "dihedraltypes", "impropertypes", "nonbond_params"]
 
-    itp_file = match.group(1)
-    line_num = int(match.group(2))
+    blocks = []  # list of (section_name, [lines])
+    current = None
+    current_lines = []
 
-    itp_path = os.path.join(directory, itp_file)
-    if not os.path.exists(itp_path):
-        print(f"❌ Could not find .itp file: {itp_path}")
-        return False
+    with open(prm_path) as f:
+        for line in f:
+            m = re.match(r"\[\s*([^\]]+?)\s*\]", line)
+            if m:
+                # flush previous block
+                if current is not None:
+                    blocks.append((current, current_lines))
+                current = m.group(1).strip()
+                current_lines = [line]
+            else:
+                if current is None:
+                    # preamble / comments before first section
+                    blocks.append(("__preamble__", [line]))
+                else:
+                    current_lines.append(line)
 
-    print(f"🩹 Commenting out line {line_num} in {itp_file}...")
-    with open(itp_path, "r") as file:
-        lines = file.readlines()
-    if line_num - 1 < len(lines):
-        lines[line_num - 1] = "; " + lines[line_num - 1]  # Comment out
-    else:
-        print("❌ Line number out of range in file.")
-        return False
-    with open(itp_path, "w") as file:
-        file.writelines(lines)
-    print(f"✅ Successfully commented out problematic dihedral in {itp_file}")
-    return True
+    if current is not None:
+        blocks.append((current, current_lines))
+
+    # sanity: ensure prm has at least something useful
+    present = {sec.lower() for sec, _ in blocks}
+    bonded_ok = any(s in present for s in ("bondtypes", "angletypes", "dihedraltypes"))
+    if not bonded_ok:
+        raise RuntimeError(f"❌ PRM has no bonded sections (bond/angle/dihedral). File: {prm_path}")
+
+    # reorder by ORDER but keep duplicates in original relative order
+    out = []
+    # keep preamble first
+    for sec, lines in blocks:
+        if sec == "__preamble__":
+            out.extend(lines)
+
+    for want in ORDER:
+        for sec, lines in blocks:
+            if sec.lower() == want:
+                out.extend(lines)
+
+    # append any unknown sections at end (rare, but safe)
+    for sec, lines in blocks:
+        if sec == "__preamble__":
+            continue
+        if sec.lower() not in ORDER:
+            out.extend(lines)
+
+    with open(prm_path, "w") as f:
+        f.writelines(out)
+
+    print(f"✅ PRM reordered safely (duplicates preserved): {os.path.basename(prm_path)}")
+
+
+
+
+
+def validate_cgenff_outputs(ligand_code, directory):
+    base = ligand_code.lower()
+    itp = os.path.join(directory, f"{base}.itp")
+    prm = os.path.join(directory, f"{base}.prm")
+    ini = os.path.join(directory, f"{base}_ini.pdb")
+
+    for path in (itp, prm, ini):
+        if not os.path.exists(path):
+            raise RuntimeError(f"❌ Missing required CGenFF output: {path}")
+        if os.path.getsize(path) == 0:
+            raise RuntimeError(f"❌ Empty CGenFF output file: {path}")
+
+    # reorder but do NOT require atomtypes/nonbond_params
+    enforce_gromacs_prm_order(prm)
+
+    print(f"✅ CGenFF outputs validated for ligand {ligand_code}")
+
+
+
+
+def build_ligand_mol2_rdkit(smiles, ligand_code, out_mol2):
+    """
+    Canonical RDKit → MOL2 path with explicit hydrogens and sane aromaticity.
+    """
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise RuntimeError("❌ RDKit failed to parse SMILES")
+
+    mol = Chem.AddHs(mol)
+    AllChem.EmbedMolecule(mol, randomSeed=2025)
+    AllChem.UFFOptimizeMolecule(mol)
+
+    mol.SetProp("_Name", ligand_code)
+
+    Chem.MolToMol2File(mol, out_mol2)
+    print(f"✅ RDKit-generated MOL2 written to {out_mol2}")
+
+
+
+def run_and_log(cmd, cwd, stdout_path=None, stderr_path=None, shell=False):
+    """
+    Run a command and optionally write stdout/stderr to files.
+    Returns (returncode, stdout_text, stderr_text).
+    """
+    stdout_f = open(stdout_path, "w") if stdout_path else subprocess.PIPE
+    stderr_f = open(stderr_path, "w") if stderr_path else subprocess.PIPE
+    try:
+        r = subprocess.run(cmd, cwd=cwd, text=True, shell=shell,
+                           stdout=stdout_f, stderr=stderr_f)
+    finally:
+        if stdout_path: stdout_f.close()
+        if stderr_path: stderr_f.close()
+
+    # If we wrote to files, read them back for quick checks
+    out_txt = ""
+    err_txt = ""
+    if stdout_path and os.path.exists(stdout_path):
+        out_txt = open(stdout_path, "r").read()
+    if stderr_path and os.path.exists(stderr_path):
+        err_txt = open(stderr_path, "r").read()
+    return r.returncode, out_txt, err_txt
+
+
+
 
 def fix_missing_atoms(input_pdb, output_pdb, ph=7.4):
     """Uses PDBFixer to fill missing atoms and add hydrogens to the PDB file."""
@@ -393,24 +534,33 @@ def count_chains(protein_pdb):
 
 import os, json
 
+
+
+
 def generate_atom_index_file(directory, chain_names_arg=None, chain_map_arg=None):
     """
     Generates atomIndex.txt with chain names.
-    Priority:
-      1. If chain_map_arg or chain_names_arg provided (from CLI or env), use that.
-      2. If saved .chainmap.json exists, reuse mapping.
-      3. Else prompt interactively.
+
+    Priority order:
+      1) Explicit CLI chain_map_arg / chain_names_arg
+      2) Cached .chainmap.json (if COMPLETE)
+      3) Interactive prompt (fallback only)
     """
+
+    import os, json
+
     protein_pdb = os.path.join(directory, "protein.pdb")
     protein_gro = os.path.join(directory, "protein_processed.gro")
     output_file = os.path.join(directory, "atomIndex.txt")
-    cache_file = os.path.join(directory, ".chainmap.json")
+    cache_file  = os.path.join(directory, ".chainmap.json")
 
     if not os.path.exists(protein_pdb) or not os.path.exists(protein_gro):
-        print(f"❌ Missing required files (protein.pdb or protein_processed.gro) in {directory}")
+        print(f"❌ Missing protein.pdb or protein_processed.gro in {directory}")
         return False
 
-    # --- Detect chain IDs
+    # --------------------------------------------------
+    # Detect chain IDs from PDB
+    # --------------------------------------------------
     chain_ids = []
     with open(protein_pdb) as f:
         for line in f:
@@ -420,91 +570,85 @@ def generate_atom_index_file(directory, chain_names_arg=None, chain_map_arg=None
                     chain_ids.append(cid)
 
     if not chain_ids:
-        print("⚠️ No chain IDs found in PDB. Defaulting to single-chain [A].")
         chain_ids = ["A"]
 
     print(f"🔍 Detected {len(chain_ids)} chain(s): {', '.join(chain_ids)}")
 
-    # --- Priority 1: CLI overrides
     chain_map = {}
+
+    # --------------------------------------------------
+    # Priority 1: explicit CLI mapping
+    # --------------------------------------------------
     if chain_map_arg:
-        for pair in chain_map_arg.split(","):
-            if ":" in pair:
+        try:
+            for pair in chain_map_arg.split(","):
                 cid, name = pair.split(":", 1)
                 chain_map[cid.strip()] = name.strip()
+            print(f"🧾 Using chain map from CLI: {chain_map}")
+        except Exception as e:
+            print(f"❌ Failed to parse --chain-map: {e}")
+            return False
+
     elif chain_names_arg:
         names = [n.strip() for n in chain_names_arg.split(",")]
         for i, cid in enumerate(chain_ids):
             if i < len(names):
                 chain_map[cid] = names[i]
+        print(f"🧾 Using chain names from CLI: {chain_map}")
 
-    # --- Priority 2: existing .chainmap.json cache
+    # --------------------------------------------------
+    # Priority 2: cached mapping (ONLY if complete)
+    # --------------------------------------------------
     elif os.path.exists(cache_file):
         with open(cache_file) as f:
             saved = json.load(f)
+
         for cid in chain_ids:
             if cid in saved:
                 chain_map[cid] = saved[cid]
-        print(f"💾 Loaded existing chain map: {chain_map}")
 
-    # --- Priority 3: interactive prompt
-    # If provided via CLI, skip prompts entirely
-    if args.chain_map:
-        try:
-            for pair in args.chain_map.split(","):
-                cid, name = [p.strip() for p in pair.split(":")]
-                chain_map[cid] = name
-            print(f"✅ Chain map provided via CLI: {chain_map}")
-        except Exception as e:
-            print(f"⚠️ Failed to parse chain map '{args.chain_map}': {e}")
-    elif args.chain_names:
-        names = [n.strip() for n in args.chain_names.split(",")]
-        for i, cid in enumerate(chain_ids):
-            if i < len(names):
-                chain_map[cid] = names[i]
-        print(f"✅ Chain names provided via CLI: {chain_map}")
-    else:
-        print("💬 No chain mapping provided; entering interactive chain naming mode.")
-        chain_map = {}
+        if all(cid in chain_map for cid in chain_ids):
+            print(f"💾 Loaded complete chain map from cache: {chain_map}")
+        else:
+            print("⚠️ Cached chain map incomplete — ignoring cache.")
+            chain_map = {}
+
+    # --------------------------------------------------
+    # Priority 3: interactive prompt (fallback)
+    # --------------------------------------------------
+    if not chain_map:
+        print("💬 Entering interactive chain naming mode.")
 
         for cid in chain_ids:
             while True:
-                name = input(f"🧩 Enter descriptive name for chain {cid} (e.g. Rap1B): ").strip()
+                name = input(f"🧩 Enter descriptive name for chain {cid}: ").strip()
                 if name:
                     chain_map[cid] = name
                     break
-                else:
-                    print("⚠️ Chain name cannot be empty. Please try again.")
+                print("⚠️ Name cannot be empty.")
 
-        print("\n✅ You entered the following chain map:")
+        print("\n✅ Chain map entered:")
         for cid, name in chain_map.items():
             print(f"   {cid} → {name}")
+
         confirm = input("Confirm these names? [Y/n]: ").strip().lower()
         if confirm == "n":
             print("🔁 Restarting chain naming...")
-            return generate_atom_index_file(directory)  # rerun prompt
+            return generate_atom_index_file(directory)
 
-    # else:
-    #     print("💬 No chain mapping provided; running fallback auto-naming.")
-    #     chain_map = {cid: f"Protein{i+1}" for i, cid in enumerate(chain_ids)}
-
-
-    # Fallback default labels
-    for i, cid in enumerate(chain_ids):
-        if cid not in chain_map:
-            chain_map[cid] = f"Protein{i+1}"
-
-    print("✅ Final chain map:")
-    for cid, name in chain_map.items():
-        print(f"   {cid} → {name}")
-
-    # --- Save cache for future reuse
+    # --------------------------------------------------
+    # Save cache
+    # --------------------------------------------------
     with open(cache_file, "w") as f:
         json.dump(chain_map, f, indent=2)
 
-    # --- Parse GRO atom index ranges
-    with open(protein_gro) as gro:
-        lines = gro.readlines()
+    print("💾 Chain map cached.")
+
+    # --------------------------------------------------
+    # Parse atom ranges from GRO
+    # --------------------------------------------------
+    with open(protein_gro) as f:
+        lines = f.readlines()
 
     atom_ranges = []
     atom_counter = 1
@@ -517,22 +661,29 @@ def generate_atom_index_file(directory, chain_names_arg=None, chain_map_arg=None
             resid = int(line[:5].strip())
         except ValueError:
             continue
+
         atom_counter = i + 1
-        if last_resid and resid < last_resid:
+
+        if last_resid is not None and resid < last_resid:
             atom_ranges.append((chain_ids[chain_index], current_start, atom_counter))
             current_start = atom_counter + 1
             chain_index = min(chain_index + 1, len(chain_ids) - 1)
+
         last_resid = resid
+
     atom_ranges.append((chain_ids[chain_index], current_start, atom_counter + 1))
 
-    # --- Write atomIndex.txt
+    # --------------------------------------------------
+    # Write atomIndex.txt
+    # --------------------------------------------------
     with open(output_file, "w") as f:
         for cid, start, end in atom_ranges:
-            label = chain_map.get(cid, f"Protein{cid}")
+            label = chain_map[cid]
             f.write(f"{label} {start}-{end}\n")
 
     print(f"✅ Generated atomIndex.txt in {directory}")
     return True
+
 
 
 # ======== NEW HELPERS FOR REALTIME CGenFF PREP ========
@@ -551,19 +702,55 @@ def ensure_silcsbio_env():
         print("❌ Missing par_all36_cgenff.prm:", prm36); return None, None, None
     return cgenff_exec, prm36, home
 
+
 def extract_ligand_from_pdb(pdb_path, ligand_code, out_pdb):
-    """Extracts only the specified 3-letter ligand (HETATM) into out_pdb."""
+    """
+    Extract ligand HETATM lines AND any CONECT records that reference ligand atom serials.
+    This preserves bonding so OpenBabel doesn't guess wrong.
+    """
     ligand_code = ligand_code.upper()
-    wrote = False
-    with open(pdb_path, "r") as fin, open(out_pdb, "w") as fout:
+    ligand_serials = set()
+    het_lines = []
+    conect_lines = []
+
+    with open(pdb_path, "r") as fin:
         for line in fin:
             if line.startswith("HETATM") and line[17:20].strip().upper() == ligand_code:
-                fout.write(line); wrote = True
-    if not wrote:
+                het_lines.append(line)
+                try:
+                    serial = int(line[6:11].strip())
+                    ligand_serials.add(serial)
+                except:
+                    pass
+
+    if not het_lines:
         print(f"❌ Could not find ligand {ligand_code} in {pdb_path}")
         return False
-    print(f"✅ Extracted ligand {ligand_code} to {out_pdb}")
+
+    # second pass: collect CONECT lines that touch ligand atoms
+    with open(pdb_path, "r") as fin:
+        for line in fin:
+            if line.startswith("CONECT"):
+                nums = []
+                for i in (6, 11, 16, 21, 26):  # PDB CONECT columns
+                    chunk = line[i:i+5].strip()
+                    if chunk:
+                        try: nums.append(int(chunk))
+                        except: pass
+                if any(n in ligand_serials for n in nums):
+                    conect_lines.append(line)
+
+    with open(out_pdb, "w") as fout:
+        fout.writelines(het_lines)
+        if conect_lines:
+            fout.writelines(conect_lines)
+        fout.write("END\n")
+
+    print(f"✅ Extracted ligand {ligand_code} (+CONECT={bool(conect_lines)}) to {out_pdb}")
     return True
+
+
+
 
 def ligand_has_hydrogens(pdb_file):
     """Detect if ligand PDB has hydrogens."""
@@ -607,6 +794,62 @@ def autodetect_ligands(pdb_path):
                     ligs.add(resname.upper())
 
     return sorted(ligs)
+
+
+
+
+def reorder_topol_for_charmm(topol_path):
+    print("🔧 Reordering topology includes for CHARMM/CGenFF safety...")
+
+    with open(topol_path) as f:
+        lines = f.readlines()
+
+    ff = []
+    protein = []
+    lig_prm = []
+    lig_itp = []
+    water = []
+    ions = []
+    rest = []
+
+    for line in lines:
+        l = line.strip()
+
+        if l.startswith("#include"):
+            if "forcefield.itp" in l:
+                ff.append(line)
+            elif "topol_Protein_chain" in l:
+                protein.append(line)
+            elif l.endswith(".prm\"") or l.endswith(".prm"):
+                lig_prm.append(line)
+            elif l.endswith(".itp\"") or l.endswith(".itp"):
+                if "spc.itp" in l:
+                    water.append(line)
+                elif "ions.itp" in l:
+                    ions.append(line)
+                elif "dr7.itp" in l or "DR7.itp" in l:
+                    lig_itp.append(line)
+                else:
+                    rest.append(line)
+            else:
+                rest.append(line)
+        else:
+            rest.append(line)
+
+    new_lines = (
+        ff +
+        lig_prm +     # ✅ PRM must come before any molecule .itp blocks
+        protein +
+        lig_itp +
+        water +
+        ions +
+        rest
+    )
+
+    with open(topol_path, "w") as f:
+        f.writelines(new_lines)
+
+    print("✅ topol.top reordered safely.")
 
 
 
@@ -664,110 +907,534 @@ def graft_coords_onto_ini(ini_pdb, pose_pdb, out_pdb):
 
 
 
+import os, re, shutil, subprocess, tempfile
+
+def _which(cmd):
+    from shutil import which
+    return which(cmd)
+
+def _find_pymol_exe():
+    """
+    Prefer a real system PyMOL binary over conda stubs.
+    Return executable path or None.
+    """
+    # Explicit common locations first (system install)
+    for p in ("/usr/bin/pymol", "/usr/local/bin/pymol"):
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+
+    # Then PATH
+    p = _which("pymol")
+    if p and os.path.isfile(p) and os.access(p, os.X_OK):
+        return p
+
+    # Sometimes packaged as pymol2
+    p2 = _which("pymol2")
+    if p2 and os.path.isfile(p2) and os.access(p2, os.X_OK):
+        return p2
+
+    return None
+
+def count_h_in_pdb(pdb_path):
+    n = 0
+    with open(pdb_path) as f:
+        for line in f:
+            if line.startswith(("ATOM", "HETATM")):
+                aname = line[12:16].strip().upper()
+                elem  = (line[76:78].strip().upper() if len(line) >= 78 else "")
+                if elem == "H" or aname.startswith("H"):
+                    n += 1
+    return n
+
+def count_h_in_mol2(mol2_path):
+    n = 0
+    in_atoms = False
+    with open(mol2_path) as f:
+        for line in f:
+            s = line.strip()
+            if s.upper() == "@<TRIPOS>ATOM":
+                in_atoms = True
+                continue
+            if s.upper().startswith("@<TRIPOS>") and s.upper() != "@<TRIPOS>ATOM":
+                in_atoms = False
+            if in_atoms and s:
+                parts = s.split()
+                if len(parts) >= 6:
+                    name = parts[1].upper()
+                    atype = parts[5].upper()
+                    if name.startswith("H") or atype.startswith("H"):
+                        n += 1
+    return n
+
+def ensure_mol2_has_substructure(mol2_path, ligand_code):
+    """
+    Some writers omit SUBSTRUCTURE. CGenFF/convert scripts can be picky.
+    If missing, append a minimal SUBSTRUCTURE block.
+    """
+    with open(mol2_path, "r") as f:
+        txt = f.read()
+    if "@<TRIPOS>SUBSTRUCTURE" in txt.upper():
+        return
+
+    # Find first atom index as root_atom
+    root_atom = 1
+    m = re.search(r"@<TRIPOS>ATOM\s+(\d+)\s+", txt, flags=re.IGNORECASE | re.MULTILINE)
+    if m:
+        try:
+            root_atom = int(m.group(1))
+        except:
+            root_atom = 1
+
+    with open(mol2_path, "a") as f:
+        f.write("\n@<TRIPOS>SUBSTRUCTURE\n")
+        # subst_id subst_name root_atom subst_type ...
+        f.write(f"     1 {ligand_code} {root_atom} {ligand_code} 0\n")
+
+
+
+def normalize_mol2_atom_resnames(mol2_path, ligand_code):
+    """
+    Force residue name column in @<TRIPOS>ATOM records to ligand_code.
+    Fixes UNK1 vs UNK mismatches that break CGenFF → GROMACS conversion.
+    """
+    ligand_code = ligand_code.strip()
+
+    with open(mol2_path) as f:
+        lines = f.readlines()
+
+    out = []
+    in_atoms = False
+
+    for line in lines:
+        s = line.strip().upper()
+
+        if s == "@<TRIPOS>ATOM":
+            in_atoms = True
+            out.append(line)
+            continue
+
+        if s.startswith("@<TRIPOS>") and s != "@<TRIPOS>ATOM":
+            in_atoms = False
+
+        if in_atoms and line.strip():
+            parts = line.split()
+            if len(parts) >= 8:
+                # parts layout:
+                # id name x y z type resid resname charge
+                parts[7] = ligand_code   # ← THIS IS THE CRITICAL FIX
+                line = " ".join(parts) + "\n"
+
+        out.append(line)
+
+    with open(mol2_path, "w") as f:
+        f.writelines(out)
+
+
+def split_paramchem_top(top_path, ligand_code, out_dir):
+    """
+    Split ParamChem GROMACS .top into:
+      - ligand .itp (moleculetype + bonded terms)
+      - ligand .prm (atomtypes / parameters)
+    """
+    lc = ligand_code.lower()
+
+    itp_path = os.path.join(out_dir, f"{lc}.itp")
+    prm_path = os.path.join(out_dir, f"{lc}.prm")
+
+    with open(top_path) as f:
+        lines = f.readlines()
+
+    prm_blocks = []
+    itp_blocks = []
+
+    mode = None
+    for line in lines:
+        if line.strip().startswith("["):
+            header = line.strip().lower()
+
+            if header in (
+                "[ atomtypes ]",
+                "[ nonbond_params ]",
+                "[ pairtypes ]"
+            ):
+                mode = "prm"
+            elif header in (
+                "[ moleculetype ]",
+                "[ atoms ]",
+                "[ bonds ]",
+                "[ angles ]",
+                "[ dihedrals ]",
+                "[ impropers ]",
+                "[ cmap ]"
+            ):
+                mode = "itp"
+            else:
+                mode = None
+
+        if mode == "prm":
+            prm_blocks.append(line)
+        elif mode == "itp":
+            itp_blocks.append(line)
+
+    if not itp_blocks:
+        raise RuntimeError("No ligand topology blocks found in ParamChem .top")
+
+    with open(itp_path, "w") as f:
+        f.writelines(itp_blocks)
+
+    with open(prm_path, "w") as f:
+        f.writelines(prm_blocks)
+
+    return itp_path, prm_path
+
+
+def normalize_paramchem_pdb(pdb_path, ligand_code, out_dir):
+    lc = ligand_code.lower()
+    out_pdb = os.path.join(out_dir, f"{lc}_ini.pdb")
+
+    with open(pdb_path) as fin, open(out_pdb, "w") as fout:
+        for line in fin:
+            if line.startswith(("ATOM", "HETATM")):
+                # Force residue name consistency
+                fout.write(
+                    line[:17] + ligand_code.ljust(3) + line[20:]
+                )
+            else:
+                fout.write(line)
+
+    return out_pdb
+
+
+def import_paramchem_gromacs(directory, ligand_code):
+    top = os.path.join(directory, f"{ligand_code}_gmx.top")
+    pdb = os.path.join(directory, f"{ligand_code}_gmx.pdb")
+
+    if not (os.path.exists(top) and os.path.exists(pdb)):
+        return None
+
+    print("🔒 Importing ParamChem GROMACS ligand topology")
+
+    ini_pdb = normalize_paramchem_pdb(pdb, ligand_code, directory)
+    itp, prm = split_paramchem_top(top, ligand_code, directory)
+
+    return {
+        "ini_pdb": ini_pdb,
+        "itp": itp,
+        "prm": prm
+    }
+
+
+
+
+def normalize_mol2_names(mol2_path, ligand_code):
+    """
+    Ensure both:
+      - @<TRIPOS>MOLECULE name line
+      - @<TRIPOS>SUBSTRUCTURE residue/substructure name
+    match ligand_code.
+    """
+    ligand_code = ligand_code.strip()
+
+    with open(mol2_path, "r") as f:
+        lines = f.readlines()
+
+    out = []
+    in_sub = False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        # Fix MOLECULE name
+        if line.strip().upper() == "@<TRIPOS>MOLECULE" and i + 1 < len(lines):
+            out.append(line)
+            out.append(f"{ligand_code}\n")
+            i += 2
+            continue
+
+        # Track SUBSTRUCTURE section
+        if line.strip().upper() == "@<TRIPOS>SUBSTRUCTURE":
+            in_sub = True
+            out.append(line)
+            i += 1
+            continue
+
+        if line.strip().upper().startswith("@<TRIPOS>") and line.strip().upper() != "@<TRIPOS>SUBSTRUCTURE":
+            in_sub = False
+
+        # Rewrite SUBSTRUCTURE lines
+        if in_sub and line.strip() and not line.lstrip().startswith("#"):
+            parts = line.split()
+            if len(parts) >= 2:
+                parts[1] = ligand_code
+            if len(parts) >= 4:
+                parts[3] = ligand_code
+            out.append(" ".join(parts) + "\n")
+            i += 1
+            continue
+
+        out.append(line)
+        i += 1
+
+    with open(mol2_path, "w") as f:
+        f.writelines(out)
+
+def normalize_str_resi_name(str_path, ligand_code):
+    ligand_code = ligand_code.strip()
+    with open(str_path, "r") as f:
+        lines = f.readlines()
+
+    out = []
+    fixed = False
+    for line in lines:
+        if (not fixed) and line.startswith("RESI"):
+            parts = line.split()
+            if len(parts) >= 3:
+                charge = parts[2]
+                out.append(f"RESI {ligand_code} {charge}\n")
+                fixed = True
+                continue
+        out.append(line)
+
+    with open(str_path, "w") as f:
+        f.writelines(out)
+
+def assert_str_has_atoms(str_path):
+    n_resi = 0
+    n_atom = 0
+    with open(str_path, "r") as f:
+        for line in f:
+            if line.startswith("RESI"):
+                n_resi += 1
+            elif line.startswith("ATOM"):
+                n_atom += 1
+    if n_resi == 0 or n_atom == 0:
+        raise RuntimeError(
+            f"❌ Invalid CGenFF .str: RESI={n_resi}, ATOM={n_atom}\n"
+            f"   This usually happens when CGenFF prints 'skipped molecule' due to bad valence/bond orders."
+        )
+
+def run_and_log(cmd, cwd, stdout_path=None, stderr_path=None):
+    stdout_f = open(stdout_path, "w") if stdout_path else subprocess.PIPE
+    stderr_f = open(stderr_path, "w") if stderr_path else subprocess.PIPE
+    try:
+        r = subprocess.run(cmd, cwd=cwd, text=True, stdout=stdout_f, stderr=stderr_f)
+    finally:
+        if stdout_path: stdout_f.close()
+        if stderr_path: stderr_f.close()
+
+    out_txt = open(stdout_path, "r").read() if stdout_path and os.path.exists(stdout_path) else ""
+    err_txt = open(stderr_path, "r").read() if stderr_path and os.path.exists(stderr_path) else ""
+    return r.returncode, out_txt, err_txt
+
+def run_command_ok(command, cwd=None):
+    """
+    Non-fatal command runner (unlike your run_command which exits).
+    Returns True/False.
+    """
+    r = subprocess.run(command, shell=True, cwd=cwd, text=True, capture_output=True)
+    if r.returncode != 0:
+        print(f"❌ Command failed: {command}\n🔺 STDERR:\n{r.stderr}")
+        return False
+    return True
+
 
 def build_cgenff_inputs_realtime(directory, ligand_code, source_complex_pdb):
     """
-    1) Extract ligand from complex PDB -> {code}_raw.pdb
-    2) Add hydrogens if needed and normalize via Open Babel -> {code}_h.pdb
-    3) Convert to MOL2 with gen3d -> {code}.cgenff.mol2
-    4) Set MOL2 molecule name to ligand_code
-    5) Run SILCSBio cgenff (stdout -> {code}.str)
-    Returns (mol2_file, str_file) or (None, None) on failure.
+    Updated workflow (PyMOL-headless first, OpenBabel fallback):
+
+    1) PyMOL headless:
+       - load complex
+       - select ligand by resn ligand_code (non-polymer, non-solvent)
+       - create object
+       - save {code}_raw.pdb
+       - add H (h_add)
+       - save {code}_h.pdb
+       - save {code}.cgenff.mol2
+
+    2) Normalize MOL2 (MOLECULE + SUBSTRUCTURE names), ensure SUBSTRUCTURE exists.
+
+    3) Run SILCSBio cgenff: stdout -> {code}.str, stderr -> {code}.cgenff.stderr.log
+       - If skipped/unfulfilled/rc!=0 -> run verbose (-v) and fail.
+
+    Returns (mol2_file, str_file) or (None, None).
     """
     cgenff_exec, prm36, silcs_home = ensure_silcsbio_env()
     if not cgenff_exec:
         return None, None
 
-    base    = ligand_code.lower()
-    raw_pdb = os.path.join(directory, f"{base}_raw.pdb")
-    h_pdb   = os.path.join(directory, f"{base}_h.pdb")
-    mol2    = os.path.join(directory, f"{ligand_code}.cgenff.mol2")  # keep your expected name
-    strout  = os.path.join(directory, f"{ligand_code}.str")
+    ligand_code = ligand_code.strip().upper()
+    base = ligand_code.lower()
 
-    # 1) Extract ligand from the complex PDB
-    if not extract_ligand_from_pdb(os.path.join(directory, source_complex_pdb), ligand_code, raw_pdb):
+    complex_pdb = os.path.join(directory, source_complex_pdb)
+    raw_pdb     = os.path.join(directory, f"{base}_raw.pdb")
+    h_pdb       = os.path.join(directory, f"{base}_h.pdb")
+    mol2        = os.path.join(directory, f"{ligand_code}.cgenff.mol2")
+    strout      = os.path.join(directory, f"{ligand_code}.str")
+
+    if not os.path.exists(complex_pdb):
+        print(f"❌ Complex PDB not found: {complex_pdb}")
         return None, None
 
-    # 2) Add H if missing (or normalize anyway)
-    if not ligand_has_hydrogens(raw_pdb):
-        ok = run_command(f"obabel {os.path.basename(raw_pdb)} -O {os.path.basename(h_pdb)} -h", cwd=directory)
-    else:
-        ok = run_command(f"obabel {os.path.basename(raw_pdb)} -O {os.path.basename(h_pdb)}", cwd=directory)
-    if not ok:
-        return None, None
+    # ------------------------------------------------------------------
+    # 1) PyMOL headless path (preferred)
+    # ------------------------------------------------------------------
+    pymol_exe = _find_pymol_exe()
+    used_pymol = False
 
-    # 3) Convert to MOL2 (gen 3D if needed)
-    ok = run_command(f"obabel {os.path.basename(h_pdb)} -O {os.path.basename(mol2)}", cwd=directory)
-    if not ok:
-        return None, None
+    if pymol_exe:
+        # Build a temporary pml script
+        pml_path = os.path.join(directory, f"{ligand_code}.extract_hadd.pml")
+        pymol_stdout = os.path.join(directory, f"{ligand_code}.pymol.stdout.log")
+        pymol_stderr = os.path.join(directory, f"{ligand_code}.pymol.stderr.log")
 
-    # 4) Force the MOL2 molecule name to be the desired ligand_code
-    #    (cgenff uses this name as the RESI name in the .str)
-    try:
-        mol2_lines = []
-        with open(mol2, "r") as f:
-            lines = f.readlines()
-        i = 0
-        while i < len(lines):
-            mol2_lines.append(lines[i])
-            if lines[i].strip().upper() == "@<TRIPOS>MOLECULE" and i + 1 < len(lines):
-                # replace the very next line with ligand_code
-                lines[i+1] = f"{ligand_code}\n"
-                mol2_lines.append(lines[i+1])
-                mol2_lines.extend(lines[i+2:])
-                break
-            i += 1
+        # Selection: non-polymer, non-solvent, resn matches ligand_code
+        # This catches GDP/ATP etc without grabbing protein residues.
+        sel = f"(resn {ligand_code} and not polymer and not solvent)"
+
+        pml = f"""
+reinitialize
+load {os.path.basename(complex_pdb)}, complex
+select LIGSEL, {sel}
+create {ligand_code}, LIGSEL
+# Ensure residue name is exactly ligand_code
+alter {ligand_code}, resn='{ligand_code}'
+sort
+save {os.path.basename(raw_pdb)}, {ligand_code}
+h_add {ligand_code}
+save {os.path.basename(h_pdb)}, {ligand_code}
+set retain_order, 1
+save {os.path.basename(mol2)}, {ligand_code}
+quit
+""".lstrip()
+
+        with open(pml_path, "w") as f:
+            f.write(pml)
+
+        print(f"🧬 PyMOL headless extract + h_add → MOL2 using: {pymol_exe}")
+        rc, out_txt, err_txt = run_and_log(
+            [pymol_exe, "-cq", os.path.basename(pml_path)],
+            cwd=directory,
+            stdout_path=pymol_stdout,
+            stderr_path=pymol_stderr
+        )
+
+        if rc == 0 and os.path.exists(mol2) and os.path.getsize(mol2) > 0:
+            nH_pdb = count_h_in_pdb(h_pdb) if os.path.exists(h_pdb) else 0
+            nH_m2  = count_h_in_mol2(mol2)
+            print(f"✅ PyMOL produced MOL2. H count: PDB={nH_pdb}, MOL2={nH_m2}")
+            if nH_m2 == 0:
+                print("⚠️ PyMOL MOL2 has 0 hydrogens — will try OpenBabel fallback.")
+            else:
+                used_pymol = True
         else:
-            # If no MOLECULE section found, just prepend one
-            mol2_lines = ["@<TRIPOS>MOLECULE\n", f"{ligand_code}\n"] + lines
-        with open(mol2, "w") as f:
-            f.writelines(mol2_lines)
+            print("⚠️ PyMOL path failed; falling back to OpenBabel.")
+            print(f"   See logs: {os.path.basename(pymol_stdout)}, {os.path.basename(pymol_stderr)}")
+    else:
+        print("ℹ️ No usable PyMOL executable found; using OpenBabel fallback.")
+
+    # ------------------------------------------------------------------
+    # 1b) OpenBabel fallback if PyMOL not used/successful
+    # ------------------------------------------------------------------
+    if not used_pymol:
+        # Use your existing extractor that preserves CONECT if possible
+        if not extract_ligand_from_pdb(complex_pdb, ligand_code, raw_pdb):
+            return None, None
+
+        # Always attempt to add H, and VERIFY it happened
+        if not run_command_ok(f"obabel -ipdb {os.path.basename(raw_pdb)} -opdb -O {os.path.basename(h_pdb)} -h -p 7.4", cwd=directory):
+            return None, None
+
+        nH = count_h_in_pdb(h_pdb)
+        print(f"🧪 OpenBabel H count after -h: {nH}")
+        if nH == 0:
+            # stronger fallback: rebuild chemistry in SDF then back to PDB
+            tmp_sdf = os.path.join(directory, f"{base}_tmp.sdf")
+            if not run_command_ok(f"obabel -ipdb {os.path.basename(raw_pdb)} -osdf -O {os.path.basename(tmp_sdf)} --gen3d -h -p 7.4", cwd=directory):
+                return None, None
+            if not run_command_ok(f"obabel -isdf {os.path.basename(tmp_sdf)} -opdb -O {os.path.basename(h_pdb)}", cwd=directory):
+                return None, None
+            nH = count_h_in_pdb(h_pdb)
+            print(f"🧪 OpenBabel H count after SDF fallback: {nH}")
+            if nH == 0:
+                print("❌ Still 0 H after fallback — cannot build a chemically valid ligand from this PDB fragment.")
+                return None, None
+
+        # MOL2 from hydrogenated PDB
+        if not run_command_ok(f"obabel -ipdb {os.path.basename(h_pdb)} -omol2 -O {os.path.basename(mol2)}", cwd=directory):
+            return None, None
+
+        nH_m2 = count_h_in_mol2(mol2)
+        print(f"🧪 OpenBabel MOL2 H count: {nH_m2}")
+        if nH_m2 == 0:
+            print("❌ MOL2 has 0 H — aborting.")
+            return None, None
+
+    # ------------------------------------------------------------------
+    # 2) Normalize MOL2 naming and ensure SUBSTRUCTURE exists
+    # ------------------------------------------------------------------
+    try:
+        ensure_mol2_has_substructure(mol2, ligand_code)
+        normalize_mol2_names(mol2, ligand_code)
+        normalize_mol2_atom_resnames(mol2, ligand_code)  # ← ADD THIS
+
     except Exception as e:
-        print(f"❌ Failed to set MOL2 molecule name: {e}")
+        print(f"❌ MOL2 normalization failed: {e}")
         return None, None
 
-    # 5) Run cgenff with ONLY the mol2 file and redirect stdout to .str
-    cgenff_cmd = f"{cgenff_exec} {os.path.basename(mol2)} > {os.path.basename(strout)}"
+    # Optional: record perceived SMILES for debugging
+    ob_smiles = os.path.join(directory, f"{ligand_code}.perceived.smi")
+    ob_err    = os.path.join(directory, f"{ligand_code}.perceived.stderr.log")
+    run_and_log(["obabel", os.path.basename(mol2), "-osmi"], cwd=directory,
+                stdout_path=ob_smiles, stderr_path=ob_err)
+    print(f"🧾 Perceived SMILES written: {os.path.basename(ob_smiles)}")
 
-    print("\n🧪 Running CGenFF parameterization...")
-    print(f"⚙️ Command: {cgenff_cmd}")
+    # ------------------------------------------------------------------
+    # 3) Run SILCSBio cgenff (stdout -> .str)
+    # ------------------------------------------------------------------
+    cgenff_stderr  = os.path.join(directory, f"{ligand_code}.cgenff.stderr.log")
+    cgenff_verbose = os.path.join(directory, f"{ligand_code}.cgenff.verbose.log")
 
-    # Execute CGenFF manually — do NOT exit() yet
-    result = subprocess.run(
-        cgenff_cmd, shell=True, cwd=directory,
-        capture_output=True, text=True
+    print("\n🧪 Running SILCSBio CGenFF parameterization...")
+    print(f"⚙️ Command: {cgenff_exec} {os.path.basename(mol2)}")
+    print(f"🧾 Output .str: {os.path.basename(strout)}")
+
+    rc, out_txt, err_txt = run_and_log(
+        [cgenff_exec, os.path.basename(mol2)],
+        cwd=directory,
+        stdout_path=strout,
+        stderr_path=cgenff_stderr
     )
 
-    # SHOW ERRORS (stdout normally empty due to redirection)
-    print(f"📜 STDERR:\n{result.stderr}")
-
-    # FAILED?
-    if result.returncode != 0:
-        print("\n❌ **CGENFF PARAMETERIZATION FAILED**")
-        print("   CGenFF could not assign parameters for this ligand.")
-        print("   Most common causes:")
-        print("   • unusual bonding or ring systems")
-        print("   • missing hydrogens or incorrect valence")
-        print("   • OpenBabel generated invalid geometry")
-        print("   • unsupported atom types in SILCSBio CGenFF")
-
-        if os.path.exists(strout):
-            print("\n📄 Partial .str file produced:")
-            print(open(strout).read())
-
-        print("⚠️ Returning (None, None) to trigger fallback.\n")
+    if ("skipped molecule" in err_txt.lower()) or ("unfulfilled valence" in err_txt.lower()) or rc != 0:
+        print("⚠️ CGenFF reported a chemistry/connectivity problem.")
+        print(f"   See: {os.path.basename(cgenff_stderr)}")
+        print("🔎 Running verbose diagnostics (-v)...")
+        run_and_log(
+            [cgenff_exec, "-v", os.path.basename(mol2)],
+            cwd=directory,
+            stdout_path=cgenff_verbose,
+            stderr_path=cgenff_stderr
+        )
+        print(f"🧾 Verbose log: {os.path.basename(cgenff_verbose)}")
         return None, None
 
-    # CHECK EMPTY .str
     if not os.path.exists(strout) or os.path.getsize(strout) == 0:
-        print("\n❌ CGENFF produced an EMPTY .str file — no parameters were generated.")
-        print("⚠️ This means the ligand is unsupported or malformed.")
+        print("❌ CGenFF produced an EMPTY .str file.")
+        print(f"   See: {os.path.basename(cgenff_stderr)}")
         return None, None
 
-    print(f"✅ CGENFF successfully generated {os.path.basename(strout)}")
-    print(f"✅ Generated {os.path.basename(mol2)} and {os.path.basename(strout)}")
+    # Normalize RESI name and hard-check ATOM presence
+    try:
+        normalize_str_resi_name(strout, ligand_code)
+        assert_str_has_atoms(strout)
+    except Exception as e:
+        print(str(e))
+        return None, None
 
+    print(f"✅ CGenFF successfully generated {os.path.basename(strout)}")
     return mol2, strout
+
+
 
 
 
@@ -867,6 +1534,19 @@ def centroid_from_gro(path, first=2, last=-1):
     return (_mean(xs), _mean(ys), _mean(zs))
 
 
+
+
+def is_cgenff_ljpme_conflict(stderr):
+    signatures = [
+        "No default Bond types",
+        "No default Proper Dih",
+        "No default U-B types",
+        "Protein_chain"
+    ]
+    return all(s in stderr for s in signatures)
+
+
+
 # ======== END NEW HELPERS ========
 
 
@@ -907,104 +1587,176 @@ def process_directory(directory, pdb_filename, ligand_code):
         return False
 
     # Step 3: Generate atom index file
-    if not generate_atom_index_file(base_directory,
+    if not generate_atom_index_file(directory,
                                 chain_names_arg=args.chain_names,
                                 chain_map_arg=args.chain_map):
         print("⚠️ Failed to generate atom index file.")
 
         return False
     
+    # ============================================================
     # Step 4: Generate ligand topology (if applicable)
+    # ============================================================
     if ligand_code:
         print("\n🛠️ Generating ligand topology...")
         forcefield_path = detect_forcefield(directory)
         if forcefield_path is None:
             return False
 
-        try:
-            # --- PRIMARY: Full SILCSBio + pose-preserving route ---
-            mol2_file = os.path.join(directory, f"{ligand_code}.cgenff.mol2")
-            str_file  = os.path.join(directory, f"{ligand_code}.str")
 
-            # 4a) Ensure we HAVE the CGenFF inputs (.mol2 + .str)
-            if not (os.path.exists(mol2_file) and os.path.exists(str_file)):
-                print("ℹ️ ParamChem files not found — generating with local CGenFF from the input PDB...")
-                built_mol2, built_str = build_cgenff_inputs_realtime(directory, ligand_code, pdb_filename)
-                if not (built_mol2 and built_str):
-                    raise RuntimeError("Local CGenFF generation failed — will trigger fallback.")
-                mol2_file, str_file = built_mol2, built_str
 
-            # 4b) Convert (.mol2 + .str) → .itp/.prm/_ini.pdb
-            if not run_command(
-                f"python cgenff_charmm2gmx_py3_nx2.py {ligand_code} "
-                f"{os.path.basename(mol2_file)} {os.path.basename(str_file)} {forcefield_path}",
-                cwd=directory
-            ):
-                raise RuntimeError("CGenFF to GROMACS conversion failed.")
+        # ============================================================
+        # Step 4: Generate ligand topology (if applicable)
+        # ============================================================
+        if ligand_code:
+            print("\n🛠️ Generating ligand topology...")
+            forcefield_path = detect_forcefield(directory)
+            if forcefield_path is None:
+                return False
 
-            # 4c) Pose-matched coordinates (keep ligand where it is in original PDB)
-            ini_pdb_file     = f"{ligand_code.lower()}_ini.pdb"
-            pose_source_pdb  = f"{ligand_code.lower()}_h.pdb"          # created by build_cgenff_inputs_realtime
-            pose_pdb         = f"{ligand_code.lower()}_pose_match.pdb" # grafted, but may be missing hydrogens
-            ligand_gro_file  = f"{ligand_code.lower()}.gro"
-
-            if not graft_coords_onto_ini(ini_pdb_file, pose_source_pdb, pose_pdb):
-                raise RuntimeError("Pose grafting failed.")
+            ligand_gro_file = None
+            ini_pdb_file    = None
 
             # ------------------------------------------------------------
-            # 🔧 NEW PATCH: Ensure final pose has hydrogens before editconf
+            # 4a0) ParamChem GROMACS import (HIGHEST PRIORITY)
             # ------------------------------------------------------------
-            pose_pdb_path = os.path.join(directory, pose_pdb)
-            pose_h_pdb    = os.path.join(directory, f"{ligand_code.lower()}_pose_h.pdb")
+            paramchem = import_paramchem_gromacs(directory, ligand_code)
 
-            if not ligand_has_hydrogens(pose_pdb_path):
-                print("🔧 Adding hydrogens to pose-matched ligand...")
+            if paramchem:
+                print("🔒 Using ParamChem GROMACS ligand topology")
+
+                ini_pdb_file = paramchem["ini_pdb"]
+                ligand_gro_file = os.path.join(directory, f"{ligand_code.lower()}.gro")
+
+                # Convert ParamChem PDB → GRO
                 if not run_command(
-                    f"obabel {os.path.basename(pose_pdb)} -O {os.path.basename(pose_h_pdb)} -h",
+                    f"gmx editconf -f {os.path.basename(ini_pdb_file)} "
+                    f"-o {os.path.basename(ligand_gro_file)}",
                     cwd=directory
                 ):
-                    raise RuntimeError("Failed to add hydrogens to pose-matched ligand.")
-                pose_final = pose_h_pdb
+                    return False
+
+                # Optional sanity check
+                prot_ctr = centroid_from_gro(os.path.join(directory, "protein_processed.gro"))
+                lig_ctr  = centroid_from_gro(ligand_gro_file)
+                print(f"🔎 Centroids (nm) — protein: {prot_ctr}, ligand: {lig_ctr}")
+
             else:
-                pose_final = pose_pdb_path
+                # ------------------------------------------------------------
+                # 4a) Ensure CGenFF inputs exist
+                # ------------------------------------------------------------
+                candidate_mol2 = None
+                for fname in (f"{ligand_code}.cgenff.mol2", f"{ligand_code}.mol2"):
+                    p = os.path.join(directory, fname)
+                    if os.path.exists(p):
+                        candidate_mol2 = p
+                        break
 
-            # 4d) Generate final ligand .gro with hydrogens guaranteed
-            if not run_command(
-                f"gmx editconf -f {os.path.basename(pose_final)} -o {ligand_gro_file}",
-                cwd=directory
-            ):
-                raise RuntimeError("Failed to generate ligand GRO file.")
+                str_file = os.path.join(directory, f"{ligand_code}.str")
 
-            # Sanity centroid check
-            prot_ctr = centroid_from_gro(os.path.join(directory, "protein_processed.gro"))
-            lig_ctr  = centroid_from_gro(os.path.join(directory, ligand_gro_file))
-            print(f"🔎 Centroids (nm) — protein: {prot_ctr}, ligand: {lig_ctr}")
+                if candidate_mol2 and os.path.exists(str_file):
+                    mol2_file = candidate_mol2
+                    print(f"✅ Using user-provided CGenFF inputs: "
+                        f"{os.path.basename(mol2_file)}, {os.path.basename(str_file)}")
+                else:
+                    print("ℹ️ Missing CGenFF inputs — attempting SILCSBio generation...")
 
-        except Exception as e:
-            # --- FALLBACK: Simple non-SILCSBio route ---
-            print(f"⚠️ CGenFF/SILCSBio route failed ({e}). Falling back to basic ligand conversion...")
+                    cgenff_exec, _, _ = ensure_silcsbio_env()
+                    if not cgenff_exec:
+                        print(
+                            "❌ No SILCSBio environment AND no pre-generated CGenFF inputs.\n"
+                            "   → Generate ligand parameters externally (ParamChem)\n"
+                            "   → Place them in this directory and rerun."
+                        )
+                        return False
 
-            mol2_file = f"{ligand_code}.cgenff.mol2"
-            str_file  = f"{ligand_code}.str"
-            ini_pdb_file = f"{ligand_code.lower()}_ini.pdb"
-            ligand_gro_file = f"{ligand_code.lower()}.gro"
+                    mol2_file, str_file = build_cgenff_inputs_realtime(
+                        directory, ligand_code, pdb_filename
+                    )
+                    if not (mol2_file and str_file):
+                        print("❌ Local CGenFF generation failed.")
+                        return False
 
-            if not run_command(
-                f"python cgenff_charmm2gmx_py3_nx2.py {ligand_code} "
-                f"{mol2_file} {str_file} {forcefield_path}",
-                cwd=directory
-            ):
-                return False
+                # ------------------------------------------------------------
+                # 4a.5) Normalize + HARD FAIL if .str is invalid
+                #       (ALWAYS for CGenFF paths)
+                # ------------------------------------------------------------
+                try:
+                    normalize_mol2_names(mol2_file, ligand_code)
+                    normalize_str_resi_name(str_file, ligand_code)
+                    assert_str_has_atoms(str_file)
+                except Exception as e:
+                    print(str(e))
+                    return False
 
-            # Fallback does not preserve pose — but still needs hydrogens
-            # editconf from _ini.pdb directly
-            if not run_command(f"gmx editconf -f {ini_pdb_file} -o {ligand_gro_file}", cwd=directory):
-                return False
+                # ------------------------------------------------------------
+                # 4b) Convert CGenFF → GROMACS
+                # ------------------------------------------------------------
+                if not run_command(
+                    f"python cgenff_charmm2gmx_py3_nx2.py {ligand_code} "
+                    f"{os.path.basename(mol2_file)} {os.path.basename(str_file)} {forcefield_path}",
+                    cwd=directory
+                ):
+                    print("❌ CGenFF → GROMACS conversion failed.")
+                    return False
 
-            print(f"✅ Fallback ligand topology generated successfully for {ligand_code}.")
+                try:
+                    validate_cgenff_outputs(ligand_code, directory)
+                except RuntimeError as e:
+                    print(str(e))
+                    return False
 
-    else:
-        print("ℹ️ No ligand present, skipping ligand topology generation.")
+                # ------------------------------------------------------------
+                # 4c) Pose-matched coordinates
+                # ------------------------------------------------------------
+                ini_pdb_file = os.path.join(directory, f"{ligand_code.lower()}_ini.pdb")
+                pose_pdb    = os.path.join(directory, f"{ligand_code.lower()}_pose_match.pdb")
+                ligand_gro_file = os.path.join(directory, f"{ligand_code.lower()}.gro")
+
+                pose_source_pdb = os.path.join(directory, f"{ligand_code.lower()}_h.pdb")
+                if not os.path.exists(pose_source_pdb):
+                    extracted_pose = os.path.join(directory, f"{ligand_code.lower()}_from_pdb.pdb")
+                    if not run_command(
+                        f"grep '{ligand_code}' {pdb_filename} > {os.path.basename(extracted_pose)}",
+                        cwd=directory
+                    ):
+                        return False
+                    pose_source_pdb = extracted_pose
+
+                if not graft_coords_onto_ini(ini_pdb_file, pose_source_pdb, pose_pdb):
+                    print("❌ Pose grafting failed.")
+                    return False
+
+                # ------------------------------------------------------------
+                # 4d) Ensure hydrogens
+                # ------------------------------------------------------------
+                pose_final = pose_pdb
+                if not ligand_has_hydrogens(pose_pdb):
+                    pose_h_pdb = os.path.join(directory, f"{ligand_code.lower()}_pose_h.pdb")
+                    if not run_command(
+                        f"obabel {os.path.basename(pose_pdb)} "
+                        f"-O {os.path.basename(pose_h_pdb)} -h",
+                        cwd=directory
+                    ):
+                        return False
+                    pose_final = pose_h_pdb
+
+                # ------------------------------------------------------------
+                # 4e) Generate ligand .gro
+                # ------------------------------------------------------------
+                if not run_command(
+                    f"gmx editconf -f {os.path.basename(pose_final)} "
+                    f"-o {os.path.basename(ligand_gro_file)}",
+                    cwd=directory
+                ):
+                    return False
+
+                prot_ctr = centroid_from_gro(os.path.join(directory, "protein_processed.gro"))
+                lig_ctr  = centroid_from_gro(ligand_gro_file)
+                print(f"🔎 Centroids (nm) — protein: {prot_ctr}, ligand: {lig_ctr}")
+
+        else:
+            print("ℹ️ No ligand present, skipping ligand topology generation.")
 
 
 
@@ -1030,80 +1782,118 @@ def process_directory(directory, pdb_filename, ligand_code):
     else:
         print("ℹ️ Skipping topology file modifications for ligand.")
 
+    # ============================================================
     # Step 7–11: GROMACS setup steps
+    # ============================================================
+
     print("\n⚙️ Running GROMACS setup steps...")
-    if not run_command("gmx editconf -f complex.gro -o newbox.gro -bt cubic -d 1.0", cwd=directory):
-        return False
-    if not run_command("gmx solvate -cp newbox.gro -cs spc216.gro -p topol.top -o solv.gro", cwd=directory):
+
+    # ------------------------------------------------------------
+    # Step 7: Define box
+    # ------------------------------------------------------------
+    if not run_command(
+        "gmx editconf -f complex.gro -o newbox.gro -bt cubic -d 1.0",
+        cwd=directory
+    ):
         return False
 
-    # Step 9: Prepare ions
+    # ------------------------------------------------------------
+    # Step 8: Solvate
+    # ------------------------------------------------------------
+    if not run_command(
+        "gmx solvate -cp newbox.gro -cs spc216.gro -p topol.top -o solv.gro",
+        cwd=directory
+    ):
+        return False
+
+    # ------------------------------------------------------------
+    # Step 9: grompp for ions (with auto-patching)
+    # ------------------------------------------------------------
     print("⚙️ Step 9: Running grompp for ion preparation...")
+
     grompp_result = subprocess.run(
         "gmx grompp -f ions.mdp -c solv.gro -p topol.top -o ions.tpr -maxwarn 2",
-        shell=True, cwd=directory, text=True, capture_output=True
+        shell=True,
+        cwd=directory,
+        text=True,
+        capture_output=True
     )
+
     if grompp_result.returncode != 0:
-        print("⚠️ Initial grompp for ions failed. Attempting to patch .itp file...")
-        print("🔍 Analyzing grompp STDERR:\n", grompp_result.stderr)
-        if comment_out_faulty_dihedral(grompp_result.stderr, directory):
-            print("🔁 Retrying grompp after patching...")
-            if not run_command("gmx grompp -f ions.mdp -c solv.gro -p topol.top -o ions.tpr -maxwarn 2", cwd=directory):
-                return False
+        stderr = grompp_result.stderr
+        print("❌ grompp failed during ion preparation")
+        print(stderr)
+
+        # ---- CASE 1: CHARMM36-LJPME + CGenFF incompatibility ----
+        if is_cgenff_ljpme_conflict(stderr):
+            print("💥 Detected CHARMM36-LJPME + CGenFF incompatibility")
+            print("🧹 Removing incompatible force field and restarting with classic CHARMM36")
+
+            ljpme_ff = os.path.join(directory, "charmm36_ljpme-jul2022.ff")
+            if os.path.isdir(ljpme_ff):
+                shutil.rmtree(ljpme_ff)
+                print("🗑️ Deleted charmm36_ljpme-jul2022.ff")
+
+            print("🔁 Re-running pipeline with classic charmm36.ff")
+            return regenerate_protein_topology(forcefield="charmm36.ff")
+
+        # ---- CASE 2: Legit include-order issue (rare) ----
+        elif (
+            "No default Bond types" in stderr and
+            "Protein_chain" in stderr
+        ):
+            print("🧠 Detected CHARMM include-order issue")
+            reorder_topol_for_charmm(os.path.join(directory, "topol.top"))
+
+            print("🔁 Retrying grompp after reorder...")
+            return run_command(
+                "gmx grompp -f ions.mdp -c solv.gro -p topol.top -o ions.tpr -maxwarn 2",
+                cwd=directory
+            )
+
+        # ---- CASE 3: Anything else is fatal ----
         else:
-            print("❌ Could not automatically fix the grompp issue.")
+            print("❌ Unrecoverable grompp error")
             return False
 
 
-    # Determine solvent (water) group index for genion automatically
+
+ 
+    # ------------------------------------------------------------
+    # Step 10: Detect solvent group for genion
+    # ------------------------------------------------------------
     make_ndx_result = subprocess.run(
         "gmx make_ndx -f solv.gro",
-        shell=True, cwd=directory, text=True, input="q\n", capture_output=True
+        shell=True,
+        cwd=directory,
+        text=True,
+        input="q\n",
+        capture_output=True
     )
 
     sol_group = None
-    ndx_arg = ""  # by default, we won't pass a custom index file
+    ndx_arg = ""
 
     if make_ndx_result.returncode == 0:
-        # Robust parse of the printed group list
         sol_group = parse_make_ndx_for_water(make_ndx_result.stdout)
 
     if sol_group is None:
-        print("❗ Could not confidently detect SOL group from make_ndx listing. Trying gmx select fallback...")
-        # Build a dedicated water-only index and use that for genion
+        print("❗ Could not detect SOL group via make_ndx. Trying gmx select fallback...")
         ndx_path, group0 = build_water_index_with_gmx_select(directory)
         if ndx_path and group0 is not None:
             ndx_arg = f"-n {os.path.basename(ndx_path)}"
             sol_group = group0
 
     if sol_group is None:
-        # As a final fallback, show user the printed groups and ask
-        print("❌ Could not determine SOL group automatically.")
-        print("📋 Here's what make_ndx returned:\n", make_ndx_result.stdout)
-        sol_group = input("🔢 Please enter the group number corresponding to SOL/Water manually: ").strip()
+        print("❌ Failed to auto-detect water group.")
+        print(make_ndx_result.stdout)
+        sol_group = input("🔢 Enter SOL/Water group number manually: ").strip()
 
-    # make_ndx_result = subprocess.run("gmx make_ndx -f solv.gro", shell=True, cwd=directory, text=True, input="q\n", capture_output=True)
-    # sol_group = None
-    # if make_ndx_result.returncode == 0:
-    #     for line in make_ndx_result.stdout.splitlines():
-    #         parts = line.split()
-    #         if parts and ("SOL" in parts[-1] or "Water" in parts[-1] or "WAT" in parts[-1]):
-    #             sol_group = parts[0]
-    #             break
-    # if sol_group is None:
-    #     print("❌ Could not determine SOL group from make_ndx.")
-    #     print("📋 Here's what make_ndx returned:")
-    #     print(make_ndx_result.stdout)
-    #     sol_group = input("🔢 Please enter the group number corresponding to SOL manually: ").strip()
+    # ------------------------------------------------------------
+    # Step 11: Add ions
+    # ------------------------------------------------------------
+    salt_m = os.environ.get("GMX_SALT_M", "0.15")
 
-    # Use the detected group + optional custom index
-    # if not run_command(
-    #     f"gmx genion -s ions.tpr -o solv_ions.gro -p topol.top -pname NA -nname CL -neutral {ndx_arg}",
-    #     cwd=directory,
-    #     input_text=f"{sol_group}\n"
-    # ):
-    #     return False
-    salt_m = os.environ.get("GMX_SALT_M", "0.15")  # default 0.15 M, override with env var
     if not run_command(
         f"gmx genion -s ions.tpr -o solv_ions.gro -p topol.top "
         f"-pname NA -nname CL -neutral -conc {salt_m} -seed 2025 {ndx_arg}",
@@ -1111,25 +1901,19 @@ def process_directory(directory, pdb_filename, ligand_code):
         input_text=f"{sol_group}\n"
     ):
         return False
-    # salt_m = args.salt
-    # if not run_command(
-    #     f"gmx genion -s ions.tpr -o solv_ions.gro -p topol.top "
-    #     f"-pname NA -nname CL -neutral -conc {salt_m} -seed 2025 {ndx_arg}",
-    #     cwd=directory,
-    #     input_text=f\"{sol_group}\\n\"
-    # ):
-    #     return False
 
-
-
-    # if not run_command("gmx genion -s ions.tpr -o solv_ions.gro -p topol.top -pname NA -nname CL -neutral", cwd=directory, input_text=f"{sol_group}\n"):
-    #     return False
-
-    if not run_command("gmx grompp -f em.mdp -c solv_ions.gro -p topol.top -o em.tpr -maxwarn 2", cwd=directory):
+    # ------------------------------------------------------------
+    # Final grompp (energy minimization)
+    # ------------------------------------------------------------
+    if not run_command(
+        "gmx grompp -f em.mdp -c solv_ions.gro -p topol.top -o em.tpr -maxwarn 2",
+        cwd=directory
+    ):
         return False
 
     print("\n✅ All setup steps completed successfully.")
     return True
+
 
 
 

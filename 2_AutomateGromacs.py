@@ -133,7 +133,8 @@ import multiprocessing
 import argparse
 import time
 import multiprocessing, os, subprocess, time
-
+import shutil
+import os
 
 def parse_args():
     p = argparse.ArgumentParser(
@@ -181,39 +182,6 @@ import subprocess
 import os
 
 
-def detect_ligands_from_gro(gro_file="em.gro"):
-    """
-    Detect non-protein, non-solvent ligands from a GROMACS .gro file.
-    Returns a sorted list of candidate resnames.
-    """
-    if not os.path.exists(gro_file):
-        return []
-
-    solvent = {"SOL", "WAT", "HOH"}
-    ions = {"NA", "CL", "K", "CA", "MG", "ZN"}
-    protein_residues = {
-        "ALA","ARG","ASN","ASP","CYS","GLU","GLN","GLY",
-        "HIS","ILE","LEU","LYS","MET","PHE","PRO","SER",
-        "THR","TRP","TYR","VAL"
-    }
-
-    ligands = set()
-
-    with open(gro_file) as f:
-        lines = f.readlines()[2:-1]  # skip header + box
-        for line in lines:
-            resname = line[5:10].strip().upper()
-            if (
-                resname not in solvent
-                and resname not in ions
-                and resname not in protein_residues
-            ):
-                ligands.add(resname)
-
-    return sorted(ligands)
-
-
-
 
 def run_command_check_rc(command, cwd=None, input_text=None):
     """
@@ -235,6 +203,36 @@ def run_command_check_rc(command, cwd=None, input_text=None):
 
 
 
+
+
+def sync_mdp_templates(run_dir, mdp_dir="MDPs"):
+    """
+    Force-sync MDP templates into the working directory.
+
+    Behavior:
+    - ALWAYS overwrites local em.mdp, ions.mdp, nvt.mdp, npt.mdp, md.mdp
+    - Treats MDPs/ as the single source of truth
+    """
+
+    required_mdps = ["em.mdp", "ions.mdp", "nvt.mdp", "npt.mdp", "md.mdp"]
+
+    template_path = os.path.join(run_dir, mdp_dir)
+    if not os.path.isdir(template_path):
+        raise FileNotFoundError(
+            f"❌ Required MDP template directory not found: {template_path}"
+        )
+
+    print("📄 Overwriting MDPs from template directory:")
+
+    for mdp in required_mdps:
+        src = os.path.join(template_path, mdp)
+        dst = os.path.join(run_dir, mdp)
+
+        if not os.path.exists(src):
+            raise FileNotFoundError(f"❌ Missing template file: {src}")
+
+        shutil.copy2(src, dst)
+        print(f"  🔁 {mdp} ← MDPs/{mdp}")
 
 
 def run_command_cpu(command, cwd=None, input_text=None):
@@ -598,6 +596,14 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
     print(f"   • OMP_NUM_THREADS={available_threads}")
 
 
+    # ============================================================
+    # 🧩 PRE-STEP — Force-sync MDP templates
+    # ============================================================
+
+    sync_mdp_templates(directory, mdp_dir="MDPs")
+
+
+
 
 
     # ============================================================
@@ -936,7 +942,7 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
 
     nvt_cmd = f"gmx mdrun -v -deffnm nvt -pin on -pinoffset {pin_offset} -ntmpi 1 -ntomp {available_threads}"
     if gpu_id >= 0:
-        nvt_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu"
+        nvt_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu -update gpu"
         print(f"⚙️  Using GPU {gpu_id} for NVT equilibration (compute mode: {args.compute}).")
     else:
         print("⚙️  No GPU selected; running NVT on CPU only.")
@@ -958,7 +964,7 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
 
     npt_cmd = f"gmx mdrun -v -deffnm npt -pin on -pinoffset {pin_offset} -ntmpi 1 -ntomp {available_threads}"
     if gpu_id >= 0:
-        npt_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu"
+        npt_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu -update gpu"
         print(f"⚙️  Using GPU {gpu_id} for NPT equilibration (compute mode: {args.compute}).")
     else:
         print("⚙️  No GPU selected; running NPT on CPU only.")
@@ -980,8 +986,7 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
 
     md_cmd = f"gmx mdrun -v -deffnm md_0_1 -pin on -pinoffset {pin_offset} -ntmpi 1 -ntomp {available_threads}"
     if gpu_id >= 0:
-        md_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu"
-
+        md_cmd += f" -gpu_id 0 -nb gpu -pme gpu -bonded gpu -update gpu"
         print(f"⚙️  Using GPU {gpu_id} for production MD (compute mode: {args.compute}).")
     else:
         print("⚙️  No GPU selected; running production MD on CPU only.")
@@ -997,123 +1002,123 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
     # ============================================================
 
     print("\n✅ MD simulation completed successfully.")
-    # print("📦 Generating centered, ligand-aware Final_Trajectory.*")
+    print("📦 Generating centered, ligand-aware Final_Trajectory.*")
 
-    # group = f"Protein_{ligand_code}"
+    group = f"Protein_{ligand_code}"
 
-    # required = ["index.ndx", "md_0_1.tpr", "md_0_1.xtc"]
-    # for f in required:
-    #     if not os.path.exists(os.path.join(directory, f)):
-    #         raise SystemExit(f"❌ Missing required file: {f}")
+    required = ["index.ndx", "md_0_1.tpr", "md_0_1.xtc"]
+    for f in required:
+        if not os.path.exists(os.path.join(directory, f)):
+            raise SystemExit(f"❌ Missing required file: {f}")
 
-    # # --- Final centered trajectory ---
-    # run_command_cpu(
-    #     f"printf '{group}\\n{group}\\n' | "
-    #     f"gmx trjconv -s md_0_1.tpr -f md_0_1.xtc "
-    #     f"-o Final_Trajectory.xtc -n index.ndx -pbc mol -center",
-    #     cwd=directory
-    # )
+    # --- Final centered trajectory ---
+    run_command_cpu(
+        f"printf '{group}\\n{group}\\n' | "
+        f"gmx trjconv -s md_0_1.tpr -f md_0_1.xtc "
+        f"-o Final_Trajectory.xtc -n index.ndx -pbc mol -center",
+        cwd=directory
+    )
 
-    # # --- Dump first frame ---
-    # run_command_cpu(
-    #     f"printf '{group}\\n' | "
-    #     f"gmx trjconv -s md_0_1.tpr -f Final_Trajectory.xtc "
-    #     f"-o Final_Trajectory_RAW.pdb -n index.ndx -dump 0",
-    #     cwd=directory
-    # )
+    # --- Dump first frame ---
+    run_command_cpu(
+        f"printf '{group}\\n' | "
+        f"gmx trjconv -s md_0_1.tpr -f Final_Trajectory.xtc "
+        f"-o Final_Trajectory_RAW.pdb -n index.ndx -dump 0",
+        cwd=directory
+    )
 
-    # # --- Rewrite ligand to HETATM ---
-    # convert_ligand_to_hetatm(
-    #     os.path.join(directory, "Final_Trajectory_RAW.pdb"),
-    #     os.path.join(directory, "Final_Trajectory.pdb"),
-    #     ligand_code
-    # )
+    # --- Rewrite ligand to HETATM ---
+    convert_ligand_to_hetatm(
+        os.path.join(directory, "Final_Trajectory_RAW.pdb"),
+        os.path.join(directory, "Final_Trajectory.pdb"),
+        ligand_code
+    )
 
-    # os.remove(os.path.join(directory, "Final_Trajectory_RAW.pdb"))
+    os.remove(os.path.join(directory, "Final_Trajectory_RAW.pdb"))
 
-    # print("✅ Final_Trajectory.xtc / Final_Trajectory.pdb ready.")
+    print("✅ Final_Trajectory.xtc / Final_Trajectory.pdb ready.")
 
 
 
-    # # ============================================================
-    # # 🧬 10. Build Binding-Pocket Subsystem (MDTraj, canonical)
-    # # ============================================================
+    # ============================================================
+    # 🧬 10. Build Binding-Pocket Subsystem (MDTraj, canonical)
+    # ============================================================
 
-    # print("\n🧬 STEP 10 — Building binding-pocket subsystem (MDTraj, 5 Å cutoff)")
+    print("\n🧬 STEP 10 — Building binding-pocket subsystem (MDTraj, 5 Å cutoff)")
 
-    # if not ligand_code:
-    #     print("ℹ️ No ligand present — skipping pocket extraction.")
-    # else:
-    #     pocket_xtc = os.path.join(directory, "binding_pocket_only.xtc")
-    #     pocket_pdb = os.path.join(directory, "binding_pocket_only.pdb")
+    if not ligand_code:
+        print("ℹ️ No ligand present — skipping pocket extraction.")
+    else:
+        pocket_xtc = os.path.join(directory, "binding_pocket_only.xtc")
+        pocket_pdb = os.path.join(directory, "binding_pocket_only.pdb")
 
-    #     if os.path.exists(pocket_xtc) and os.path.exists(pocket_pdb):
-    #         print("⏭️ Binding-pocket files already exist — skipping rebuild.")
-    #     else:
-    #         try:
-    #             import mdtraj as md
-    #             import numpy as np
+        if os.path.exists(pocket_xtc) and os.path.exists(pocket_pdb):
+            print("⏭️ Binding-pocket files already exist — skipping rebuild.")
+        else:
+            try:
+                import mdtraj as md
+                import numpy as np
 
-    #             traj = md.load(
-    #                 os.path.join(directory, "Final_Trajectory.xtc"),
-    #                 top=os.path.join(directory, "Final_Trajectory.pdb")
-    #             )
+                traj = md.load(
+                    os.path.join(directory, "Final_Trajectory.xtc"),
+                    top=os.path.join(directory, "Final_Trajectory.pdb")
+                )
 
-    #             lig = ligand_code.upper()
+                lig = ligand_code.upper()
 
-    #             lig_atoms = traj.topology.select(f"resname {lig}")
-    #             prot_atoms = traj.topology.select("protein")
+                lig_atoms = traj.topology.select(f"resname {lig}")
+                prot_atoms = traj.topology.select("protein")
 
-    #             if len(lig_atoms) == 0:
-    #                 raise RuntimeError(
-    #                     f"Ligand {lig} not found in Final_Trajectory.pdb"
-    #                 )
+                if len(lig_atoms) == 0:
+                    raise RuntimeError(
+                        f"Ligand {lig} not found in Final_Trajectory.pdb"
+                    )
 
-    #             neighbors = md.compute_neighbors(
-    #                 traj,
-    #                 cutoff=0.5,  # nm → 5 Å
-    #                 query_indices=lig_atoms,
-    #                 haystack_indices=prot_atoms
-    #             )
+                neighbors = md.compute_neighbors(
+                    traj,
+                    cutoff=0.5,  # nm → 5 Å
+                    query_indices=lig_atoms,
+                    haystack_indices=prot_atoms
+                )
 
-    #             if len(neighbors) == 0:
-    #                 raise RuntimeError(
-    #                     "No protein atoms found within 5 Å of ligand."
-    #                 )
+                if len(neighbors) == 0:
+                    raise RuntimeError(
+                        "No protein atoms found within 5 Å of ligand."
+                    )
 
-    #             pocket_atoms = np.unique(np.concatenate(neighbors))
+                pocket_atoms = np.unique(np.concatenate(neighbors))
 
-    #             pocket_residues = sorted(
-    #                 {
-    #                     traj.topology.atom(idx).residue.index
-    #                     for idx in pocket_atoms
-    #                 }
-    #             )
+                pocket_residues = sorted(
+                    {
+                        traj.topology.atom(idx).residue.index
+                        for idx in pocket_atoms
+                    }
+                )
 
-    #             print(f"🎯 Binding pocket contains {len(pocket_residues)} residues.")
+                print(f"🎯 Binding pocket contains {len(pocket_residues)} residues.")
 
-    #             sel = traj.topology.select(
-    #                 "resid " + " ".join(map(str, pocket_residues)) +
-    #                 f" or resname {lig}"
-    #             )
+                sel = traj.topology.select(
+                    "resid " + " ".join(map(str, pocket_residues)) +
+                    f" or resname {lig}"
+                )
 
-    #             pocket = traj.atom_slice(sel)
+                pocket = traj.atom_slice(sel)
 
-    #             pocket.save(pocket_xtc)
-    #             pocket[0].save(pocket_pdb.replace(".pdb", "_RAW.pdb"))
+                pocket.save(pocket_xtc)
+                pocket[0].save(pocket_pdb.replace(".pdb", "_RAW.pdb"))
 
-    #             convert_ligand_to_hetatm(
-    #                 pocket_pdb.replace(".pdb", "_RAW.pdb"),
-    #                 pocket_pdb,
-    #                 lig
-    #             )
-    #             os.remove(pocket_pdb.replace(".pdb", "_RAW.pdb"))
+                convert_ligand_to_hetatm(
+                    pocket_pdb.replace(".pdb", "_RAW.pdb"),
+                    pocket_pdb,
+                    lig
+                )
+                os.remove(pocket_pdb.replace(".pdb", "_RAW.pdb"))
 
-    #             print("✅ binding_pocket_only.xtc / .pdb written successfully.")
+                print("✅ binding_pocket_only.xtc / .pdb written successfully.")
 
-    #         except Exception as e:
-    #             print(f"❌ STEP 10 pocket extraction failed: {e}")
-    #             raise
+            except Exception as e:
+                print(f"❌ STEP 10 pocket extraction failed: {e}")
+                raise
 
 
     # # ============================================================
@@ -1215,39 +1220,15 @@ if __name__ == "__main__":
     ligand_code = None
     if simulation_type.lower() in ["ligand:protein", "ligand", "protac"]:
 
-        # 1️⃣ CLI override always wins
+
         if args.ligand:
             ligand_code = args.ligand.upper()
-
         else:
-            detected = detect_ligands_from_gro("em.gro")
-
-            # 2️⃣ Exactly one ligand → auto-prompt
-            if len(detected) == 1:
-                lig = detected[0]
-                if args.headless:
-                    ligand_code = lig
-                    print(f"🤖 Headless mode: auto-selected ligand {lig}")
-                else:
-                    use = input(f"Detected ligand '{lig}'. Use this ligand? [Y/n]: ").strip().lower()
-                    ligand_code = lig if use in ["", "y", "yes"] else None
-
-            # 3️⃣ Multiple ligands → explicit choice
-            elif len(detected) > 1:
-                print("\nDetected multiple ligands:")
-                for i, lig in enumerate(detected, 1):
-                    print(f"  [{i}] {lig}")
-                choice = input("Select ligand by number or press ENTER to type manually: ").strip()
-                if choice.isdigit() and 1 <= int(choice) <= len(detected):
-                    ligand_code = detected[int(choice) - 1]
-
-            # 4️⃣ Fallback → manual input
-            if not ligand_code:
-                ligand_code = input("Enter the 3-letter ligand code: ").strip().upper()
-                if not ligand_code:
-                    print("❌ Ligand code is required for this simulation type.")
-                    exit(1)
-
+            ligand_code_input = input("Enter the 3-letter ligand code (e.g., PTC): ").strip().upper()
+            if len(ligand_code_input) == 0:
+                print("❌ Ligand code is required for this simulation type.")
+                exit(1)
+            ligand_code = ligand_code_input
 
     # Production length
     if args.ns is not None:

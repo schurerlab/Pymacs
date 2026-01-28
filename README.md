@@ -1,494 +1,503 @@
-# 🧬 PyMACS  
-**Python Molecular Analysis & Clustering Suite**
+# 🧬 PyMACS
+**PyMACS: A Python-Based Automation Suite for GROMACS Molecular Dynamics Setup, Simulation, and Analysis**
 
-*A modular GROMACS automation, analysis, and figure-generation toolkit for molecular dynamics workflows*
+*A modular GROMACS automation, simulation, analysis, and figurebook-generation toolkit for molecular dynamics workflows built around CHARMM36 + CGenFF support.*
 
-**Author:** Joseph-Michael Schulz  
-**Affiliation:** University of Miami  
-**Status:** Active development (official repository)
+**Authors:** Joseph M. Schulz¹, Robert C. Reynolds², Stephan C. Schürer*¹˒³˒⁴  
+¹ Department of Molecular and Cellular Pharmacology, University of Miami, Miami, FL, USA  
+² O’Neal Comprehensive Cancer Center, University of Alabama at Birmingham, Birmingham, AL 35205, USA  
+³ Sylvester Comprehensive Cancer Center, University of Miami Miller School of Medicine, Miami, FL, USA  
+⁴ Frost Institute for Data Science & Computing, University of Miami, Miami, FL, USA  
+*Corresponding author:* sschurer@miami.edu  
+
+**Repo name:** `PyMACs`  
+**Status:** Active development (manuscript + software in development)
 
 ---
 
 ## 📖 Overview
 
-**PyMACS** is a Python-based toolkit for **automating molecular dynamics (MD) simulations**, **trajectory analysis**, and **publication-ready figure generation** using **GROMACS** and the **CHARMM36 force field**.
+**PyMACS** is a Python-based toolkit for **automating molecular dynamics (MD) setup**, **running MD simulations**, **trajectory analysis**, and **publication-ready figure/report generation** using **GROMACS** and **CHARMM36**.
 
-The project is designed to support **protein**, **protein–ligand**, and **PROTAC / ternary complex** workflows with a strong emphasis on:
+It is designed to support:
 
-- Reproducibility  
-- Scriptable, headless execution  
-- Scalable analysis across many simulations  
-- Clean downstream visualization and reporting  
+- **Protein-only systems**
+- **Protein–ligand systems**
+- **Protein–protein systems**
+- **PROTAC / multi-component workflows** (optional utilities)
 
-PyMACS is intended for **computational structural biology**, **drug discovery**, and **targeted protein degradation (TPD)** research.
+Core goals:
+
+- Reproducibility and clear logging
+- Scriptable, headless execution (works well in `tmux`)
+- Scalable/batch-friendly analysis across many simulations
+- Clean downstream visualization and reporting
 
 ---
 
-## 🧩 Repository Structure
+## 📝 Manuscript (Tentative / In Development)
 
+**Title:** *PyMACS: A Python-Based Automation Suite for GROMACS Molecular Dynamics Setup, Simulation, and Analysis*  
+**Authors:** Joseph M. Schulz¹, Robert C. Reynolds², Stephan C. Schürer*¹˒³˒⁴  
+*Corresponding author:* sschurer@miami.edu  
+
+> Manuscript is currently in development. Software behavior, CLI/options, and defaults may evolve.
+
+---
+
+## 📦 What’s in this repo (Current directory layout)
+
+This reflects the **current** repository structure (matches `tree`):
+
+```text
+PyMACs/
+├── 00_GenerateMDP.sh
+├── 00_RUNMDfull.sh
+├── 1_AutomateGromacs.py
+├── 2_AutomateGromacs.py
+├── 2A_AutoGMXrestart.py
+├── 3A_AutomateGromacs.py
+├── 3B_NETWORX.py
+├── 4PDF4MD.py
+├── 4_Files.txt
+├── 4_MDfigs.txt
+├── README.md
+├── cgenff_charmm2gmx_py3_nx2.py
+├── charmm36.ff/
+├── charmm36_ljpme-jul2022.ff/
+├── MDPs/
+│   ├── em.mdp
+│   ├── ions.mdp
+│   ├── md.mdp
+│   ├── npt.mdp
+│   └── nvt.mdp
+├── Additional/
+│   ├── OLD2_AutomateMD.py
+│   └── PROTAC_AnalysisScripts.py
+├── envs/
+│   ├── ENV_MD.yml
+│   ├── GMXanalysis.md
+│   ├── environment_cgenff.yml
+│   └── environment_mdanalysis.yml
+├── gromacs_install.md
+├── mdanalysis_environment.yml
+├── mdanalysis2_environment.yml
+├── recreate_envs.sh
+└── step3Fix.pdf
 ```
 
-Pymacs/
-│
-├── 1_AutomateGromacs.py        # System preparation & topology generation
-├── 2_AutomateGromacs.py        # Energy minimization, equilibration, production MD
-├── 3A_AutomateGromacs.py       # Trajectory analysis (RMSD, RMSF, contacts)
-├── 3B_NETWORX.py               # Interaction network & contact graph analysis
-│
-├── 4PDF4MD.py                  # Automated PDF report / figure compilation
-├── 4_MDfigs.txt                # Figure configuration / figure list
-│
-├── charmm36_ljpme-jul2022.ff/  # CHARMM36 force field (LJ-PME)
-│
-├── cgenff_charmm2gmx_py3_nx2.py # CGenFF → GROMACS ligand conversion helper
-│
-├── em.mdp                      # Energy minimization parameters
-├── nvt.mdp                     # NVT equilibration parameters
-├── npt.mdp                     # NPT equilibration parameters
-├── md.mdp                      # Production MD parameters
-├── ions.mdp                    # Ion generation parameters
-│
-├── environment_cgenff.yml      # Conda env: ligand parameterization
-├── environment_mdanalysis.yml  # Conda env: MD & analysis
-├── recreate_envs.sh            # Convenience script for env recreation
-│
-├── Example/                    # Reproducible example system (HRP-2 PWWP + CPD32)
-│   ├── CPD32_9G94.pdb           # Crystal structure 9G94
-│   └── A1D/                     # CGenFF ligand parameters (compound 32)
-│       ├── A1D.cgenff.mol2
-│       ├── A1D.mol2
-│       ├── A1D.str
-│       └── A1D.err
-│
-└── README.md
+---
+
+## ⚙️ System requirements
+
+- **OS:** Linux or WSL2 recommended (macOS may work for analysis-only; GROMACS install varies)
+- **GROMACS:** 2022+ (non-MPI binary expected)
+  - Must be callable as: `gmx`
+  - If you use `gmx_mpi`, you’ll need to adapt scripts
+- **Python:** managed by conda environments
+- **Conda/Mamba:** recommended for reproducibility
+- **tmux:** optional but strongly recommended for long runs
+- **GPU:** optional but recommended for production MD
+
+---
+
+## 🧪 Environment setup
+
+Create the environments from the YAMLs in `envs/`:
+
+```bash
+conda env create -f envs/environment_cgenff.yml
+conda env create -f envs/environment_mdanalysis.yml
 ```
 
----
-## ⚙️ System Requirements
+Or use the helper:
 
-- **OS:** Linux or WSL2  
-- **Python:** ≥ 3.9  
-- **GROMACS:** 2022+ (non-MPI build, available as `gmx`)  
-- **GPU:** Optional but recommended for production MD  
-- **Conda / Mamba:** Required  
+```bash
+bash recreate_envs.sh
+```
 
-> ⚠️ This repository assumes **`gmx` (non-MPI)** execution.  
-> MPI / cluster usage requires adaptation.
+See also: `gromacs_install.md`.
 
 ---
 
-## 🧪 Ligand Parameterization Requirements (CGenFF / SILCSBio)
+## 🧬 Force fields included
 
-Ligand parameterization in PyMACS relies on **CGenFF** and supports **two equivalent workflows**:
+This repo ships with **two** CHARMM36 variants:
+
+- `charmm36.ff` → classic CHARMM36 (**recommended default for many CGenFF-ligand workflows**)
+- `charmm36_ljpme-jul2022.ff` → CHARMM36 **LJ-PME** variant
+
+### Important (force field folder hygiene)
+
+If you keep **multiple** force field folders in the same **run directory**, auto-detection and include-order can become ambiguous.
+
+**Best practice:**
+- Run PyMACS in a **clean per-system project folder**
+- Copy in **only the force field folder you intend to use** (and keep the original “golden” repo clone untouched)
 
 ---
 
-### ✅ Option 1 — Local SILCSBio Installation (Recommended)
+## 🧪 Ligand parameterization and CGenFF support
 
-For fully automated ligand processing, **SILCSBio** must be installed locally and available in your `PATH`.  
-SILCSBio is **free for academic users** and can be obtained from:
+PyMACS supports CGenFF ligands, but **not all CGenFF output formats are interchangeable** across force field variants and conversion styles.
 
-👉 https://cgenff.com/
+### ✅ What PyMACS is built around (canonical path)
 
-After installation, ensure the following environment variables are set:
+PyMACS is designed around **CGenFF CHARMM-format outputs**:
+
+- `<LIG>.cgenff.mol2`
+- `<LIG>.str`
+
+and a local conversion step via:
+
+- `cgenff_charmm2gmx_py3_nx2.py`  → producing GROMACS-compatible ligand files (e.g., `.itp/.prm` and includes)
+
+### ⚠️ Common failure mode
+
+Pre-converted “GROMACS bundles” from the CGenFF server or third-party converters can differ in:
+- include ordering
+- atomtype declarations
+- duplication/overlap with force field parameters
+- assumptions about LJ-PME vs classic CHARMM36
+
+To support real-world lab usage, PyMACS includes **three** workarounds/modes.
+
+---
+
+## ✅ The 3 CGenFF workarounds (PyMACS-supported modes)
+
+### Mode 1 — Import *pre-converted* GROMACS ligand files (advanced / bring-your-own)
+
+Use this when you already have GROMACS-formatted ligand files (e.g., `.itp` + `.prm`, plus any supporting includes).
+
+**Critical rule:**  
+If you import already-converted GROMACS ligand files, you must avoid force field duplication and ambiguity.
+
+**Do this in your run folder:**
+1. **Keep only the intended force field folder** (recommended: `charmm36.ff` for CGenFF ligand systems)
+2. **Remove/move any other force field folders**, especially if you downloaded a conversion bundle that already contains FF-like includes.
+   - Example: if you are using classic CHARMM36, remove/move:
+     - `charmm36_ljpme-jul2022.ff/`
+3. Ensure your `topol.top` includes:
+   - exactly one ligand `.itp` include
+   - any required ligand parameter include(s) (if used)
+   - one `[ molecules ]` entry for the ligand
+
+> If you import ligand files and also keep multiple force fields or conversion folders around, you can get silent parameter conflicts or `grompp` errors.
+
+---
+
+### Mode 2 — CGenFF server outputs only (`.str + .cgenff.mol2`) (recommended / reproducible)
+
+Use this when you can obtain from the CGenFF server:
+
+- `<LIG>.cgenff.mol2`
+- `<LIG>.str`
+
+Place them in your run directory before running PyMACS. PyMACS will convert locally using the included converter.
+
+**Naming must match your PDB residue name exactly** (typically 3 letters):
+- PDB resname: `A1D`
+- files: `A1D.cgenff.mol2` and `A1D.str`
+
+---
+
+### Mode 3 — Fully automated ligand processing (local SILCSBio/CGenFF)
+
+Use this when SILCSBio/CGenFF is installed locally and available in `PATH`. PyMACS will attempt to:
+- extract ligand coordinates from the input PDB,
+- prepare/convert ligand,
+- generate CGenFF `.str + .cgenff.mol2`,
+- convert to GROMACS includes,
+- integrate into `topol.top`.
+
+If using SILCSBio, a typical setup looks like:
 
 ```bash
 export SILCSBIO_HOME=$HOME/silcsbio.2024.1
 export PATH="$SILCSBIO_HOME/programs:$SILCSBIO_HOME:$PATH"
 ```
 
-This configuration enables PyMACS to:
-
-- Automatically extract ligands from the input PDB  
-- Generate `.mol2` files  
-- Run CGenFF locally  
-- Convert CHARMM stream files into GROMACS-compatible formats  
-
-This is the **preferred workflow** for headless execution and high-throughput studies.
-
 ---
 
-### 🔁 Option 2 — CGenFF Online Server (No Local Installation Required)
+## 🚀 Quick start (interactive)
 
-If SILCSBio cannot be installed locally, PyMACS can still be used by leveraging the **CGenFF online server**.
-
-In this case, users must manually:
-
-1. Upload the ligand structure to the CGenFF server  
-2. Download the resulting files:  
-   - `<LIG>.cgenff.mol2`  
-   - `<LIG>.str`  
-3. Place both files in the working directory **before running PyMACS**
-
-#### ⚠️ Critical naming and formatting requirements
-
-To ensure correct ligand detection and topology generation:
-
-- The ligand **residue name** in the PDB (three-letter code, e.g. `A1D`) **must match exactly**  
-- The MOL2 file **must be named**:
-
-```
-A1D.cgenff.mol2
-```
-
-- The CHARMM stream file **must be named**:
-
-```
-A1D.str
-```
-
-- The uploaded ligand structure **must contain hydrogens**  
-- Atom naming and bonding must be chemically consistent
-
-Failure to meet these requirements may cause ligand parsing or force-field generation to fail.
-
-Once the correctly named `.cgenff.mol2` and `.str` files are present, PyMACS will automatically detect and use them, bypassing the need for a local SILCSBio installation.
-
----
-
-### 🧠 Summary
-
-| Workflow | SILCSBio Required | Automation Level |
-|--------|------------------|------------------|
-| Local SILCSBio | ✅ Yes | Fully automated |
-| Online CGenFF | ❌ No | Semi-manual (ligand only) |
-
-Both approaches generate **identical CGenFF parameters** and are fully compatible with downstream PyMACS workflows.
-
----
-## 🧪 Conda Environments
-
-Two reproducible environments are provided:
-
-| Environment | Purpose | File |
-|------------|-------|------|
-| `cgenff` | Ligand parameterization (CGenFF, Open Babel) | `environment_cgenff.yml` |
-| `mdanalysis` | MD execution & analysis | `environment_mdanalysis.yml` |
-
-Create both with:
+### 1) Make launchers executable
 
 ```bash
-conda env create -f environment_cgenff.yml
-conda env create -f environment_mdanalysis.yml
+chmod +x 00_RUNMDfull.sh 00_GenerateMDP.sh
 ```
 
-Or recreate automatically:
+### 2) Run the full pipeline
 
 ```bash
-bash recreate_envs.sh
+./00_RUNMDfull.sh
 ```
+
+The launcher guides you through:
+- selecting an input PDB
+- ligand detection/confirmation (if applicable)
+- chain naming / mapping
+- simulation length
+- long-run execution workflow (often with `tmux`)
 
 ---
 
-## 🧱 Step 1 — System Setup  
-**`1_AutomateGromacs.py`**
+## 🧩 Pipeline stages (scripts)
 
-Prepares a complete GROMACS-ready system from an input PDB.
+### 🧱 Step 1 — Setup (`1_AutomateGromacs.py`)
+Typical actions:
+- reads the PDB and detects chains
+- runs `pdb2gmx` for the protein topology
+- detects non-water HETATM residues as ligand candidates
+- integrates ligand parameters using one of the **3 CGenFF modes**
+- solvates + ionizes
+- writes helper maps like `atomIndex.txt`
 
-### Capabilities
+### ⚙️ Step 2 — Equilibration + Production (`2_AutomateGromacs.py`)
+Typical actions:
+- EM → NVT → NPT → Production MD
+- GPU-ready execution (if available)
+- thread tuning via environment and script prompts
 
-- Chain parsing and mapping  
-- CHARMM36 topology generation  
-- Automatic ligand detection (HETATM, non-water)  
-- CGenFF-based ligand parameterization  
-- Solvation and ionization (physiological salt)  
-- Index and atom mapping generation
+### 🔁 Step 2A — Restart + Finalize (`2A_AutoGMXrestart.py`)
+Typical actions:
+- detects `.cpt` checkpoints and resumes
+- exports cleaned/final trajectories (e.g., `Final_Trajectory.*`)
 
-### Example
+### 📊 Step 3A — Analysis (`3A_AutomateGromacs.py`)
+Typical actions (workflow-dependent):
+- RMSD / RMSF
+- contacts / pocket extraction
+- additional structure/interaction analysis depending on your installed tools
+
+### 🕸 Step 3B — Network analysis (`3B_NETWORX.py`)
+Optional residue/contact network utilities.
+
+### 🧾 Step 4 — PDF figurebook (`4PDF4MD.py`)
+Compiles analysis outputs into a PDF report, ordered via `4_MDfigs.txt`.
+
+---
+
+## 🧭 Guided walkthrough (interactive template)
+
+This section is intentionally **verbose** and mirrors the “what you actually do” experience, including typical prompts.  
+Use it as a **copy/paste** scaffold for your own systems.
+
+### 📁 Step 0 — Prepare a clean run directory (recommended)
+
+**Do not run in the repo root.**  
+Make a per-system directory and copy in what you need. This prevents:
+- accidental forcefield ambiguity
+- parameter collisions
+- issues if you choose a workflow that removes/moves folders during fallback/repair
+
+Example:
+
+```bash
+mkdir -p RUNS/MySystem_01
+cd RUNS/MySystem_01
+
+# Copy scripts
+cp ../../1_AutomateGromacs.py .
+cp ../../2_AutomateGromacs.py .
+cp ../../2A_AutoGMXrestart.py .
+cp ../../3A_AutomateGromacs.py .
+cp ../../3B_NETWORX.py .
+cp ../../4PDF4MD.py .
+cp ../../4_MDfigs.txt .
+cp ../../4_Files.txt .
+cp ../../00_RUNMDfull.sh .
+cp ../../00_GenerateMDP.sh .
+cp ../../cgenff_charmm2gmx_py3_nx2.py .
+
+# Copy MDP templates
+mkdir -p MDPs
+cp -r ../../MDPs/* ./MDPs/
+
+# Copy exactly ONE force field folder (recommended for CGenFF): classic CHARMM36
+cp -r ../../charmm36.ff .
+
+# Copy your input structure(s)
+cp /path/to/your/input.pdb .
+```
+
+If you intend to use LJ-PME for a protein-only system, copy `charmm36_ljpme-jul2022.ff` instead.
+
+---
+
+### 🧱 Step 1 — System preparation (`1_AutomateGromacs.py`)
+
+Activate the ligand/setup environment:
 
 ```bash
 conda activate cgenff
-python 1_AutomateGromacs.py 
-```
-
----
-
-## ⚙️ Step 2 — Equilibration & Production MD  
-**`2_AutomateGromacs.py`**
-
-Runs the full MD protocol:
-
-**Energy Minimization → NVT → NPT → Production MD**
-
-### Features
-
-- GPU-aware execution  
-- Automatic `nsteps` scaling from nanoseconds  
-- Protein / ligand temperature coupling groups  
-- Checkpoint-safe execution
-
-### Example
-
-```bash
-conda activate mdanalysis
-python 2_AutomateGromacs.py 
-```
-
----
-
-## 📊 Step 3 — Trajectory Analysis  
-**`3A_AutomateGromacs.py`**
-
-Performs structural and dynamical analysis of MD trajectories.
-
-### Outputs
-
-- RMSD and RMSF profiles  
-- Residue-wise contact frequencies  
-- Ligand–protein interaction persistence
-
-```bash
-python 3A_AutomateGromacs.py 
-```
-
----
-
-## 🕸 Step 3B — Interaction Networks  
-**`3B_NETWORX.py`**
-
-Generates interaction networks and contact graphs for protein–ligand or ternary systems.
-
-- Residue–residue and residue–ligand networks  
-- Graph-based interaction persistence  
-- Visual-ready network outputs
-
----
-
-## 📄 Automated Figures & Reports  
-**`4PDF4MD.py`**
-
-Assembles analysis outputs into a **single, publication-ready PDF**.
-
-- Figure ordering controlled via `4_MDfigs.txt`  
-- Batch-safe execution across many systems  
-- Suitable for supplements and internal reports
-
-```bash
-python 4PDF4MD.py 
-```
----
-
-## 🧠 Best Practices
-
-- Ensure `gmx` is available in your active environment  
-- Keep `charmm36_ljpme-jul2022.ff` in the project root  
-- Separate setup (`cgenff`) and MD (`mdanalysis`) environments  
-- Retain logs and parameter files for reproducibility
-
----
-
-
-## 🧭 Guided Example Walkthrough (Interactive Template)
-
-This section provides a complete, reproducible walkthrough of the PyMACS pipeline using the included example system (HRP-2 PWWP domain bound to compound 32; `CPD32_9G94.pdb`, ligand code `A1D`). The steps below mirror the **actual interactive prompts** encountered when running each script, allowing users to follow along exactly or adapt the workflow for their own systems.
-
----
-
-### 📁 Step 0 — Prepare the Working Directory
-
-Create a clean working directory and copy all required files into a single location. All PyMACS scripts, parameter files, and inputs are expected to reside in the same directory during execution.
-
-```bash
-mkdir MD_Example
-cd MD_Example
-
-cp ../Pymacs/*.py .
-cp ../Pymacs/*.mdp .
-cp -r ../Pymacs/charmm36_ljpme-jul2022.ff .
-cp ../Pymacs/Example/CPD32_9G94.pdb .
-cp -r ../Pymacs/Example/A1D .
-```
-
-This directory now contains:
-
-* The crystal structure (`CPD32_9G94.pdb`)
-* Pre-generated CGenFF ligand parameters (`A1D.cgenff.mol2`, `A1D.str`, etc.)
-* All PyMACS scripts and MDP templates
-* The CHARMM36/LJ-PME force field directory
-
----
-
-### 🧱 Step 1 — System Preparation & Parameterization (`1_AutomateGromacs.py`)
-
-Run the preparation script in interactive mode:
-
-```bash
 python 1_AutomateGromacs.py
 ```
 
-Typical prompts and recommended responses for the example system are shown below.
+Typical prompt flow (example):
 
-**Select input structure**
-
+**Select input PDB**
 ```
 Available PDB files:
-1) CPD32_9G94.pdb
-
+1) input.pdb
 Select a PDB file by number: 1
 ```
 
-**Ligand detection and confirmation**
-
+**Ligand detection (if present)**
 ```
 Detected ligand candidates: A1D
 Use A1D as ligand? [Y/n]: Y
 ```
 
-**Chain naming**
-
+**Chain naming / mapping**
 ```
-Detected chains: A
-Enter descriptive name for chain A: LEDGF
-```
-
-**pH and structure fixing**
-
-```
-Enter pH for protonation [default 7.4]:
-Fix missing residues and atoms? [Y/n]: Y
+Detected chains: A B
+Enter descriptive name for chain A: ProteinA
+Enter descriptive name for chain B: ProteinB
 ```
 
-**CGenFF handling**
+**CGenFF handling (choose your mode)**
 
-* If SILCSBio/CGenFF is available in the PATH, the ligand is parameterized automatically.
-* If not, the script will detect the pre-generated `A1D.cgenff.mol2` and `A1D.str` files and proceed without reparameterization.
+- **Mode 2 (recommended):** ensure `A1D.cgenff.mol2` and `A1D.str` exist in the run folder beforehand
+- **Mode 3 (automated):** ensure SILCSBio is installed and in PATH
+- **Mode 1 (import):** ensure your ligand `.itp/.prm` are present and you removed extra FF folders/includes that could collide
 
-At completion, the directory contains a fully solvated and ionized system, a master topology (`topol.top`), an index file (`index.ndx`), and an energy-minimization-ready input (`em.tpr`).
+Expected outputs (names may vary slightly by workflow and system):
+- `topol.top`
+- solvated/ionized coordinate files (`*.gro`)
+- `index.ndx`
+- a minimization-ready `.tpr` (or the files needed to build it)
+- helper mapping files (e.g., `atomIndex.txt`)
 
 ---
 
-### ⚙️ Step 2 — Energy Minimization, Equilibration & Production (`2_AutomateGromacs.py`)
+### ⚙️ Step 2 — EM → NVT → NPT → Production (`2_AutomateGromacs.py`)
 
-Run the simulation driver:
+Activate the MD environment:
 
 ```bash
+conda activate mdanalysis
 python 2_AutomateGromacs.py
 ```
 
-The script executes the following stages sequentially:
+Typical flow:
+- energy minimization
+- equilibration (NVT/NPT)
+- production MD (duration often selected interactively)
 
-* Steepest-descent energy minimization
-* NVT equilibration with positional restraints
-* NPT equilibration with pressure coupling and gradual restraint release
-* Production MD for the user-defined simulation length
-
-Thread count and GPU usage are auto-detected, with interactive confirmation when applicable. Checkpoint files are written automatically, allowing interrupted simulations to be restarted safely.
-
-Successful completion produces the final trajectory (`md_0_1.xtc`), topology (`md_0_1.tpr`), and associated energy and log files.
+Outputs commonly include:
+- `md_0_1.xtc`
+- `md_0_1.tpr`
+- `.edr`, `.log`, and checkpoint files (`.cpt`)
 
 ---
 
-### 📊 Step 3 — Trajectory Analysis & Interaction Mapping (`3A_AutomateGromacs.py`)
+### 🔁 Step 2A — Restart/finalize (`2A_AutoGMXrestart.py`)
 
-Run the analysis script:
+If your run was interrupted or you want “final cleaned exports”:
 
 ```bash
+conda activate mdanalysis
+python 2A_AutoGMXrestart.py
+```
+
+Typical exports:
+- `Final_Trajectory.xtc`
+- `Final_Trajectory.pdb`
+- additional convenience files depending on your workflow
+
+---
+
+### 📊 Step 3A — Analysis (`3A_AutomateGromacs.py`)
+
+Run the analysis:
+
+```bash
+conda activate mdanalysis
 python 3A_AutomateGromacs.py
 ```
 
-Key interactive prompts include:
-
-**Ligand selection**
-
+Typical prompts:
 ```
 Detected ligand candidate: A1D
 Use A1D as ligand? [Y/n]: Y
-```
-
-**Compound display name**
-
-```
 Enter compound display name (or press ENTER to use resname): CPD32
-```
-
-**Thread configuration**
-
-```
 Detected 24 CPU threads available
 Enter number of threads to use [ENTER = auto]:
 ```
 
-The script automatically:
-
-* Recenters the trajectory and extracts a ligand-focused subset
-* Identifies the dynamic binding pocket (5 Å cutoff)
-* Computes global and per-chain RMSD/RMSF
-* Quantifies ligand stability and radius of gyration
-* Generates secondary-structure timelines (DSSP)
-* Builds residue-level contact maps and interaction frequency plots
-
-All results are written to the `Analysis_Results/` directory.
+Common outputs (workflow-dependent), often stored under:
+- `Analysis_Results/`
 
 ---
 
-### 🧬 Step 4 — Interaction Networks & Reporting (`3B_NETWORX.py`, `4PDF4MD.py`)
-
-Interaction network diagrams are generated automatically at the end of Step 3 or can be rerun independently. Optional prompts control layout geometry and edge visibility.
-
-Finally, assemble all plots into a single report:
+### 🕸 Step 3B — Networks (`3B_NETWORX.py`) (optional)
 
 ```bash
+conda activate mdanalysis
+python 3B_NETWORX.py
+```
+
+---
+
+### 📄 Step 4 — PDF figurebook (`4PDF4MD.py`)
+
+Compile plots into a PDF figurebook/report:
+
+```bash
+conda activate mdanalysis
 python 4PDF4MD.py
 ```
 
-This produces a multi-panel, publication-ready PDF summarizing structural stability, ligand dynamics, interaction persistence, and binding-site organization.
+Figure ordering is controlled via:
+- `4_MDfigs.txt`
 
 ---
 
-### ✅ Outcome
+## 🧠 tmux quick tips (recommended)
 
-Following this walkthrough yields a fully reproducible MD simulation and analysis of the HRP-2 PWWP–CPD32 complex, serving as a validated reference for adapting PyMACS to new protein–ligand or multi-component systems.
-
----
-## 📘 Reference Output: Example Analysis Figurebook
-
-To further support reproducibility and validation, the `Example/` directory includes a **pre-generated analysis report** produced by running the full PyMACS pipeline on the example system:
-
-```
-Example/
-├── A1D/
-├── CPD32_9G94.pdb
-└── MD_ANALYSIS_FIGUREBOOK.pdf
-```
-
-**`MD_ANALYSIS_FIGUREBOOK.pdf`** is a consolidated, publication-style figurebook generated by `4PDF4MD.py` following trajectory analysis and interaction mapping. It contains representative outputs from each major analysis stage, including:
-
-* Protein and ligand RMSD and RMSF profiles
-* Radius of gyration time series
-* Secondary-structure evolution (DSSP)
-* Ligand–protein contact maps and interaction frequencies
-* Interaction network diagrams and binding-site summaries
-
-This document serves as a **ground-truth reference** for users running the example workflow locally. When executing the guided walkthrough described above, users should obtain qualitatively similar plots and trends (allowing for minor numerical differences due to platform, threading, or stochastic effects). Deviations beyond expected variation may indicate differences in simulation parameters, environment configuration, or execution order.
-
-Including this reference output allows users to:
-
-* Verify that their PyMACS installation is functioning correctly
-* Confirm correct ligand detection, topology generation, and analysis behavior
-* Compare newly generated results against a known, validated run
-* Rapidly understand the scope and structure of PyMACS analysis outputs without first running long simulations
+| Action | Command |
+|---|---|
+| Start a named session | `tmux new -s MDRUN` |
+| Detach | `Ctrl+b`, then `d` |
+| List sessions | `tmux ls` |
+| Re-attach | `tmux attach -t MDRUN` |
+| Kill | `tmux kill-session -t MDRUN` |
 
 ---
 
-### 🔍 Recommended Use
+## 🧯 Troubleshooting notes
 
-* **First-time users**: Review `MD_ANALYSIS_FIGUREBOOK.pdf` before running simulations to understand expected outputs.
-* **Validation runs**: Compare locally generated figures against the reference after completing the walkthrough.
-* **Method development**: Use the figurebook as a visual baseline when extending or modifying analysis scripts.
+- For known setup/parameter issues and fixes, see: `step3Fix.pdf`
+- If you see `grompp` errors about missing bonded/dihedral types, re-check:
+  - force field folder selection (`charmm36.ff` vs LJ-PME)
+  - CGenFF mode used
+  - duplicated includes / atomtypes when importing pre-converted ligand files
 
+---
+
+## 📌 Best practices
+
+- One system per folder; keep run folders clean.
+- For CGenFF ligands, prefer **classic `charmm36.ff`** unless you have validated LJ-PME end-to-end.
+- Archive for reproducibility:
+  - input PDB
+  - ligand `.str/.cgenff.mol2` and generated `.itp/.prm` (or your imported ligand files)
+  - `mdrun.log`/script logs
+  - final `.tpr` and `.cpt`
+
+---
 
 ## 🧬 Citation
 
-If you use PyMACS in academic work, please cite:
+If you use PyMACS in academic work, please cite the manuscript (in preparation) and/or the software release:
 
-> Schulz, J.-M. *PyMACS: A Modular GROMACS Automation and Analysis Suite* (University of Miami, 2026).
+> Schulz, J. M., Reynolds, R. C., & Schürer, S. C. **PyMACS: A Python-Based Automation Suite for GROMACS Molecular Dynamics Setup, Simulation, and Analysis.** (in preparation)
 
 ---
 
 ## 📬 Contact
 
-For questions, issues, or contributions, please open a GitHub Issue or contact the jmschulz@med.miami.edu directly.
-
-
-
-
+- **Joseph M. Schulz:** University of Miami  
+- **Stephan C. Schürer (corresponding author):** sschurer@miami.edu
