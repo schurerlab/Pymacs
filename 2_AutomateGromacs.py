@@ -1055,124 +1055,124 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
     # 🧠 9. Final Trajectory Generation (Delegates to STEP A)
     # ============================================================
 
-    print("\n✅ MD simulation completed successfully.")
-    print("📦 Generating centered, ligand-aware Final_Trajectory.*")
+    # print("\n✅ MD simulation completed successfully.")
+    # print("📦 Generating centered, ligand-aware Final_Trajectory.*")
 
-    group = f"Protein_{ligand_code}"
+    # group = f"Protein_{ligand_code}"
 
-    required = ["index.ndx", "md_0_1.tpr", "md_0_1.xtc"]
-    for f in required:
-        if not os.path.exists(os.path.join(directory, f)):
-            raise SystemExit(f"❌ Missing required file: {f}")
+    # required = ["index.ndx", "md_0_1.tpr", "md_0_1.xtc"]
+    # for f in required:
+    #     if not os.path.exists(os.path.join(directory, f)):
+    #         raise SystemExit(f"❌ Missing required file: {f}")
 
-    # --- Final centered trajectory ---
-    run_command_cpu(
-        f"printf '{group}\\n{group}\\n' | "
-        f"gmx trjconv -s md_0_1.tpr -f md_0_1.xtc "
-        f"-o Final_Trajectory.xtc -n index.ndx -pbc mol -center",
-        cwd=directory
-    )
+    # # --- Final centered trajectory ---
+    # run_command_cpu(
+    #     f"printf '{group}\\n{group}\\n' | "
+    #     f"gmx trjconv -s md_0_1.tpr -f md_0_1.xtc "
+    #     f"-o Final_Trajectory.xtc -n index.ndx -pbc mol -center",
+    #     cwd=directory
+    # )
 
-    # --- Dump first frame ---
-    run_command_cpu(
-        f"printf '{group}\\n' | "
-        f"gmx trjconv -s md_0_1.tpr -f Final_Trajectory.xtc "
-        f"-o Final_Trajectory_RAW.pdb -n index.ndx -dump 0",
-        cwd=directory
-    )
+    # # --- Dump first frame ---
+    # run_command_cpu(
+    #     f"printf '{group}\\n' | "
+    #     f"gmx trjconv -s md_0_1.tpr -f Final_Trajectory.xtc "
+    #     f"-o Final_Trajectory_RAW.pdb -n index.ndx -dump 0",
+    #     cwd=directory
+    # )
 
-    # --- Rewrite ligand to HETATM ---
-    convert_ligand_to_hetatm(
-        os.path.join(directory, "Final_Trajectory_RAW.pdb"),
-        os.path.join(directory, "Final_Trajectory.pdb"),
-        ligand_code
-    )
+    # # --- Rewrite ligand to HETATM ---
+    # convert_ligand_to_hetatm(
+    #     os.path.join(directory, "Final_Trajectory_RAW.pdb"),
+    #     os.path.join(directory, "Final_Trajectory.pdb"),
+    #     ligand_code
+    # )
 
-    os.remove(os.path.join(directory, "Final_Trajectory_RAW.pdb"))
+    # os.remove(os.path.join(directory, "Final_Trajectory_RAW.pdb"))
 
-    print("✅ Final_Trajectory.xtc / Final_Trajectory.pdb ready.")
+    # print("✅ Final_Trajectory.xtc / Final_Trajectory.pdb ready.")
 
 
 
-    # ============================================================
-    # 🧬 10. Build Binding-Pocket Subsystem (MDTraj, canonical)
-    # ============================================================
+    # # ============================================================
+    # # 🧬 10. Build Binding-Pocket Subsystem (MDTraj, canonical)
+    # # ============================================================
 
-    print("\n🧬 STEP 10 — Building binding-pocket subsystem (MDTraj, 5 Å cutoff)")
+    # print("\n🧬 STEP 10 — Building binding-pocket subsystem (MDTraj, 5 Å cutoff)")
 
-    if not ligand_code:
-        print("ℹ️ No ligand present — skipping pocket extraction.")
-    else:
-        pocket_xtc = os.path.join(directory, "binding_pocket_only.xtc")
-        pocket_pdb = os.path.join(directory, "binding_pocket_only.pdb")
+    # if not ligand_code:
+    #     print("ℹ️ No ligand present — skipping pocket extraction.")
+    # else:
+    #     pocket_xtc = os.path.join(directory, "binding_pocket_only.xtc")
+    #     pocket_pdb = os.path.join(directory, "binding_pocket_only.pdb")
 
-        if os.path.exists(pocket_xtc) and os.path.exists(pocket_pdb):
-            print("⏭️ Binding-pocket files already exist — skipping rebuild.")
-        else:
-            try:
-                import mdtraj as md
-                import numpy as np
+    #     if os.path.exists(pocket_xtc) and os.path.exists(pocket_pdb):
+    #         print("⏭️ Binding-pocket files already exist — skipping rebuild.")
+    #     else:
+    #         try:
+    #             import mdtraj as md
+    #             import numpy as np
 
-                traj = md.load(
-                    os.path.join(directory, "Final_Trajectory.xtc"),
-                    top=os.path.join(directory, "Final_Trajectory.pdb")
-                )
+    #             traj = md.load(
+    #                 os.path.join(directory, "Final_Trajectory.xtc"),
+    #                 top=os.path.join(directory, "Final_Trajectory.pdb")
+    #             )
 
-                lig = ligand_code.upper()
+    #             lig = ligand_code.upper()
 
-                lig_atoms = traj.topology.select(f"resname {lig}")
-                prot_atoms = traj.topology.select("protein")
+    #             lig_atoms = traj.topology.select(f"resname {lig}")
+    #             prot_atoms = traj.topology.select("protein")
 
-                if len(lig_atoms) == 0:
-                    raise RuntimeError(
-                        f"Ligand {lig} not found in Final_Trajectory.pdb"
-                    )
+    #             if len(lig_atoms) == 0:
+    #                 raise RuntimeError(
+    #                     f"Ligand {lig} not found in Final_Trajectory.pdb"
+    #                 )
 
-                neighbors = md.compute_neighbors(
-                    traj,
-                    cutoff=0.5,  # nm → 5 Å
-                    query_indices=lig_atoms,
-                    haystack_indices=prot_atoms
-                )
+    #             neighbors = md.compute_neighbors(
+    #                 traj,
+    #                 cutoff=0.5,  # nm → 5 Å
+    #                 query_indices=lig_atoms,
+    #                 haystack_indices=prot_atoms
+    #             )
 
-                if len(neighbors) == 0:
-                    raise RuntimeError(
-                        "No protein atoms found within 5 Å of ligand."
-                    )
+    #             if len(neighbors) == 0:
+    #                 raise RuntimeError(
+    #                     "No protein atoms found within 5 Å of ligand."
+    #                 )
 
-                pocket_atoms = np.unique(np.concatenate(neighbors))
+    #             pocket_atoms = np.unique(np.concatenate(neighbors))
 
-                pocket_residues = sorted(
-                    {
-                        traj.topology.atom(idx).residue.index
-                        for idx in pocket_atoms
-                    }
-                )
+    #             pocket_residues = sorted(
+    #                 {
+    #                     traj.topology.atom(idx).residue.index
+    #                     for idx in pocket_atoms
+    #                 }
+    #             )
 
-                print(f"🎯 Binding pocket contains {len(pocket_residues)} residues.")
+    #             print(f"🎯 Binding pocket contains {len(pocket_residues)} residues.")
 
-                sel = traj.topology.select(
-                    "resid " + " ".join(map(str, pocket_residues)) +
-                    f" or resname {lig}"
-                )
+    #             sel = traj.topology.select(
+    #                 "resid " + " ".join(map(str, pocket_residues)) +
+    #                 f" or resname {lig}"
+    #             )
 
-                pocket = traj.atom_slice(sel)
+    #             pocket = traj.atom_slice(sel)
 
-                pocket.save(pocket_xtc)
-                pocket[0].save(pocket_pdb.replace(".pdb", "_RAW.pdb"))
+    #             pocket.save(pocket_xtc)
+    #             pocket[0].save(pocket_pdb.replace(".pdb", "_RAW.pdb"))
 
-                convert_ligand_to_hetatm(
-                    pocket_pdb.replace(".pdb", "_RAW.pdb"),
-                    pocket_pdb,
-                    lig
-                )
-                os.remove(pocket_pdb.replace(".pdb", "_RAW.pdb"))
+    #             convert_ligand_to_hetatm(
+    #                 pocket_pdb.replace(".pdb", "_RAW.pdb"),
+    #                 pocket_pdb,
+    #                 lig
+    #             )
+    #             os.remove(pocket_pdb.replace(".pdb", "_RAW.pdb"))
 
-                print("✅ binding_pocket_only.xtc / .pdb written successfully.")
+    #             print("✅ binding_pocket_only.xtc / .pdb written successfully.")
 
-            except Exception as e:
-                print(f"❌ STEP 10 pocket extraction failed: {e}")
-                raise
+    #         except Exception as e:
+    #             print(f"❌ STEP 10 pocket extraction failed: {e}")
+    #             raise
 
 
     # # ============================================================

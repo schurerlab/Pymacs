@@ -76,6 +76,22 @@ def run(cmd, cwd=None, env=None, shell=True, check=True):
     return res
 
 
+def is_update_gpu_failure(stderr: str) -> bool:
+    """
+    Detect GROMACS failures related to GPU update incompatibility
+    (e.g., virtual sites).
+    """
+    if not stderr:
+        return False
+    patterns = [
+        "Update task can not run on the GPU",
+        "Virtual sites are not supported",
+        "decideWhetherToUseGpuForUpdate"
+    ]
+    return any(p in stderr for p in patterns)
+
+
+
 
 def prompt_if_none(value, message, cast=str, default=None):
     if value is not None:
@@ -93,36 +109,92 @@ def prompt_if_none(value, message, cast=str, default=None):
 # ⚙️ 1. Resume MD
 # ============================================================
 
+
 def resume_md(env, use_gpu=False, gpu_id=0, threads=32):
-    """
-    Resume or start production MD with strict GPU mapping.
-    GPU_ID refers to the physical GPU number on the host.
-    Inside this env, GROMACS will only see one visible device (ID 0).
-    """
     if not os.path.exists("md_0_1.tpr"):
         log("❌ md_0_1.tpr not found — cannot start production MD.")
         return
 
-    # Always use GPU 0 *inside* CUDA sandbox
-    visible_gpu = 0 if use_gpu else None
+    base_cmd = (
+        f"gmx mdrun -v -deffnm md_0_1 "
+        f"-pin off -ntmpi 1 -ntomp {threads}"
+    )
 
-    cmd = f"gmx mdrun -v -deffnm md_0_1 -pin off -ntmpi 1 -ntomp {threads}"
     if os.path.exists("md_0_1.cpt"):
-        cmd += " -cpi md_0_1.cpt"
+        base_cmd += " -cpi md_0_1.cpt"
         log("⏯️  Resuming MD from checkpoint (md_0_1.cpt)")
     else:
         log("▶️  Starting fresh MD run (no checkpoint found)")
 
-    if use_gpu:
-        cmd += f" -gpu_id {visible_gpu} -nb gpu -pme gpu -bonded gpu -update gpu"
-        log(f"🚀 Launching MD on physical GPU {gpu_id} (visible as {visible_gpu} inside CUDA context)")
-    else:
+    if not use_gpu:
         log("🧠 Launching CPU-only MD run.")
+        run(base_cmd, env=env, check=True)
+        return
 
-    # Optional: echo visible GPUs for debugging
+    # --- GPU attempt #1: update on GPU ---
+    gpu_cmd = (
+        base_cmd +
+        " -gpu_id 0 -nb gpu -pme gpu -bonded gpu -update gpu"
+    )
+
+    log("🚀 Attempting GPU MD run with GPU update")
     run("nvidia-smi -L", env=env, shell=True, check=False)
-    run(cmd, env=env, check=True)
+
+    res = run(gpu_cmd, env=env, check=False)
+
+    # --- If it failed, inspect why ---
+    if res.returncode != 0 and is_update_gpu_failure(res.stderr):
+        log("⚠️ GPU update not supported (virtual sites detected)")
+        log("🔁 Retrying with CPU-based updates (hybrid GPU/CPU mode)")
+
+        cpu_update_cmd = (
+            base_cmd +
+            " -gpu_id 0 -nb gpu -pme gpu -bonded gpu -update cpu"
+        )
+
+        run(cpu_update_cmd, env=env, check=True)
+        log("✅ MD resumed successfully with CPU updates.")
+        return
+
+    # --- Other failure → abort ---
+    if res.returncode != 0:
+        raise SystemExit("❌ MD run failed for an unexpected reason.")
+
     log("✅ Production MD completed successfully.")
+
+
+
+
+def detect_ligand_from_cgenff():
+    """
+    Detect ligand name from *.cgenff.mol2 file.
+    Returns ligand code (uppercase) or None.
+    """
+    mol2_files = [
+        f for f in os.listdir(".")
+        if f.lower().endswith(".cgenff.mol2")
+    ]
+
+    if not mol2_files:
+        return None
+
+    if len(mol2_files) > 1:
+        log("⚠️ Multiple CGenFF MOL2 files detected:")
+        for i, f in enumerate(mol2_files):
+            log(f"  [{i}] {f}")
+        idx = prompt_if_none(
+            None,
+            "Select ligand MOL2 index:",
+            int,
+            default=0
+        )
+        fname = mol2_files[idx]
+    else:
+        fname = mol2_files[0]
+
+    ligand = fname.split(".cgenff.mol2")[0]
+    return ligand.upper()
+
 
 
 # ============================================================
@@ -244,8 +316,38 @@ def main():
     ap.add_argument("--cpu-only", action="store_true", help="Force CPU-only run even if GPU available")
     args = ap.parse_args()
 
-    # ─── 1️⃣ Ligand Input ────────────────────────────────
-    ligand = prompt_if_none(args.ligand, "Enter 3-letter ligand code (e.g., GDP):", str, default="GDP")
+    # ─── 1️⃣ Ligand Detection / Confirmation ─────────────────
+    ligand = args.ligand
+
+    if ligand is None:
+        detected = detect_ligand_from_cgenff()
+
+        if detected:
+            ans = input(
+                f"🔍 Detected ligand '{detected}' from CGenFF files. "
+                "Use this ligand? [Y/n]: "
+            ).strip().lower()
+            if ans in ("", "y", "yes"):
+                ligand = detected
+            else:
+                ligand = prompt_if_none(
+                    None,
+                    "Enter 3-letter ligand code:",
+                    str
+                )
+        else:
+            log("⚠️ No CGenFF ligand detected.")
+            ligand = prompt_if_none(
+                None,
+                "Enter 3-letter ligand code:",
+                str,
+                default=None
+            )
+
+    ligand = ligand.upper() if ligand else None
+    log(f"🧬 Using ligand: {ligand}")
+
+
 
     # ─── 2️⃣ CPU Threads + Offset ─────────────────────────
     total_cores = psutil.cpu_count(logical=True)
