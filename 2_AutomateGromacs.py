@@ -149,6 +149,13 @@ def parse_args():
     p.add_argument("--pinoffset", type=int, default=None, help="Starting CPU core index for thread pinning")
     p.add_argument("--headless", action="store_true",
                    help="Non-interactive mode; skip all prompts and use provided flags")
+    p.add_argument("--production_only", action="store_true",
+               help="Skip EM/NVT/NPT and run production only (resume if checkpoint exists).")
+    p.add_argument("--resume", action="store_true",
+                help="If md checkpoint exists, resume production from it (non-interactive).")
+    p.add_argument("--force_restart", action="store_true",
+                help="Do NOT resume even if checkpoint exists (start pipeline normally).")
+
 
     args = p.parse_args()
 
@@ -252,6 +259,80 @@ import subprocess
 import os
 
 
+import shutil
+import re
+import subprocess
+import os
+
+def read_tpr_nsteps_dt(tpr_path: str):
+    """
+    Pull dt (ps) and nsteps from a TPR by streaming `gmx dump`,
+    stopping as soon as we find both.
+    """
+    cmd = f"gmx dump -s {tpr_path}"
+    proc = subprocess.Popen(cmd, shell=True, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+    dt_ps = None
+    nsteps = None
+
+    for line in proc.stdout:
+        if dt_ps is None and "delta_t" in line:
+            m = re.search(r"delta_t\s*=\s*([0-9.]+)", line)
+            if m:
+                dt_ps = float(m.group(1))
+
+        if nsteps is None and "nsteps" in line:
+            m = re.search(r"nsteps\s*=\s*(\d+)", line)
+            if m:
+                nsteps = int(m.group(1))
+
+        if dt_ps is not None and nsteps is not None:
+            proc.kill()
+            break
+
+    proc.wait()
+    return nsteps, dt_ps
+
+
+def tpr_total_ns(tpr_path: str):
+    nsteps, dt_ps = read_tpr_nsteps_dt(tpr_path)
+    if nsteps is None or dt_ps is None:
+        return None
+    # time = nsteps * dt (ps) -> convert ps to ns
+    return (nsteps * dt_ps) / 1000.0
+
+
+def extend_tpr_to_target_ns(directory: str, tpr_name: str, target_ns: float):
+    """
+    Extend existing TPR to reach target_ns (TOTAL length).
+    Uses `gmx convert-tpr -extend` (extend time in ps).
+    """
+    tpr_path = os.path.join(directory, tpr_name)
+    current_ns = tpr_total_ns(tpr_path)
+
+    if current_ns is None:
+        print("⚠️ Could not read current TPR length; skipping extension.")
+        return
+
+    if target_ns <= current_ns + 1e-6:
+        print(f"ℹ️ TPR already set to ~{current_ns:.3f} ns (>= {target_ns} ns). No extension needed.")
+        return
+
+    extend_ns = target_ns - current_ns
+    extend_ps = extend_ns * 1000.0
+
+    tmp_tpr = tpr_path + ".tmp"
+    print(f"🧩 Extending TPR: {current_ns:.3f} ns → {target_ns:.3f} ns (extend {extend_ns:.3f} ns)")
+
+    run_command_cpu(
+        f"gmx convert-tpr -s {tpr_name} -extend {extend_ps:.3f} -o {os.path.basename(tmp_tpr)}",
+        cwd=directory
+    )
+    shutil.move(tmp_tpr, tpr_path)
+    print("✅ TPR extension complete.")
+
+
 
 def run_command_check_rc(command, cwd=None, input_text=None):
     """
@@ -274,6 +355,56 @@ def run_command_check_rc(command, cwd=None, input_text=None):
 
 
 
+
+def maybe_resume_production_only(directory, args, gpu_id, pin_offset, threads, use_gpu, target_ns, md_deffnm="md_0_1"):
+    md_tpr = os.path.join(directory, f"{md_deffnm}.tpr")
+    md_cpt = os.path.join(directory, f"{md_deffnm}.cpt")
+    md_prev_cpt = os.path.join(directory, f"{md_deffnm}_prev.cpt")
+
+    # Prefer md_0_1.cpt, fallback to md_0_1_prev.cpt if needed
+    cpt_to_use = md_cpt if os.path.exists(md_cpt) else (md_prev_cpt if os.path.exists(md_prev_cpt) else None)
+
+    if args.force_restart:
+        return False
+
+    if not (os.path.exists(md_tpr) and cpt_to_use):
+        return False
+
+    # Decide whether to resume
+    if args.production_only or args.resume:
+        do_resume = True
+    elif args.headless:
+        # sensible default for headless runs: resume if possible
+        do_resume = True
+    else:
+        ans = input(
+            f"\n♻️ Found production checkpoint ({os.path.basename(cpt_to_use)}).\n"
+            f"Resume production ONLY (skip EM/NVT/NPT)? [Y/n]: "
+        ).strip().lower()
+        do_resume = (ans in ("", "y", "yes"))
+
+    if not do_resume:
+        return False
+
+    print("\n🚀 Resuming PRODUCTION only...")
+    # If user requested a longer run, extend the TPR so it doesn’t stop early
+    if target_ns is not None:
+        extend_tpr_to_target_ns(directory, f"{md_deffnm}.tpr", float(target_ns))
+
+    base_cmd = f"gmx mdrun -v -deffnm {md_deffnm} -cpi {os.path.basename(cpt_to_use)} -append"
+
+    # Reuse your existing GPU→GPU-lite→CPU fallback runner
+    run_mdrun_with_fallback(
+        base_cmd=base_cmd,
+        cwd=directory,
+        pin_offset=pin_offset,
+        threads=threads,
+        gpu_id=gpu_id,
+        use_gpu=use_gpu
+    )
+
+    print("✅ Production resume complete.\n")
+    return True
 
 
 
@@ -691,6 +822,18 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
 
 
 
+    # after your Step 0 environment config (once pin_offset and available_threads are known)
+    if maybe_resume_production_only(
+        directory=directory,
+        args=args,
+        gpu_id=gpu_id,
+        pin_offset=pin_offset,
+        threads=available_threads,
+        use_gpu=use_gpu,
+        target_ns=simulation_time_ns,
+        md_deffnm="md_0_1"
+    ):
+        return  # <- IMPORTANT: skip steps 1–7 entirely
 
 
     # ============================================================
@@ -933,7 +1076,7 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
                 input_text="q\n"
             )
             print("✅ index.ndx built (protein only)\n")
-            return
+            
 
         # ------------------------------------------------------------
         # 5D — PROTAC MODE (uses atomIndex.txt)
@@ -986,7 +1129,7 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
             )
 
             print("✅ PROTAC index.ndx built\n")
-            return
+           
 
         # ------------------------------------------------------------
         # 5E — LIGAND MODE (SIMPLE, CLEAN, SINGLE MERGE)
@@ -1062,27 +1205,58 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
 
 
     # ============================================================
-    # 🧠 8. Production MD
+    # 🧠 8. Production MD (resume from checkpoint if present)
     # ============================================================
     print("🧠 [STEP 8] Starting production MD ...")
 
-    run_command_cpu(
-        "gmx grompp -f md.mdp -c npt.gro -t npt.cpt -p topol.top -n index.ndx -o md_0_1.tpr -maxwarn 2",
-        cwd=directory
+    md_deffnm = "md_0_1"
+    md_tpr = os.path.join(directory, f"{md_deffnm}.tpr")
+    md_cpt = os.path.join(directory, f"{md_deffnm}.cpt")
+    md_xtc = os.path.join(directory, f"{md_deffnm}.xtc")
+    md_log = os.path.join(directory, f"{md_deffnm}.log")
+
+    # If we have a checkpoint + tpr, resume (do NOT regenerate tpr)
+    if os.path.exists(md_cpt) and os.path.exists(md_tpr):
+        print(f"♻️ Found checkpoint: {md_cpt}")
+        print("   → Resuming production with -cpi and -append (skipping grompp).")
+        do_grompp = False
+    else:
+        do_grompp = True
+
+        # Optional safety: if outputs exist but no checkpoint, mdrun may refuse to overwrite
+        if os.path.exists(md_xtc) or os.path.exists(md_log):
+            print("⚠️ Output files exist but no checkpoint was found.")
+            print("   GROMACS may refuse to overwrite these outputs.")
+            print("   Consider backing them up, or rerun with a new deffnm.")
+
+    if do_grompp:
+        run_command_cpu(
+            "gmx grompp -f md.mdp -c npt.gro -t npt.cpt -p topol.top -n index.ndx "
+            f"-o {md_deffnm}.tpr -maxwarn 2",
+            cwd=directory
+        )
+
+    md_cmd = (
+        f"gmx mdrun -v -deffnm {md_deffnm} "
+        f"-pin on -pinoffset {pin_offset} -ntmpi 1 -ntomp {available_threads}"
     )
 
-    # ✅ GPU→GPU-lite→CPU fallback
-    run_mdrun_with_fallback(
-        base_cmd="gmx mdrun -v -deffnm md_0_1",
-        cwd=directory,
-        pin_offset=pin_offset,
-        threads=available_threads,
-        gpu_id=gpu_id,
-        use_gpu=use_gpu
-    )
+    # Resume flags
+    if os.path.exists(md_cpt):
+        md_cmd += f" -cpi {md_deffnm}.cpt -append"
+
+    if gpu_id >= 0:
+        md_cmd += " -gpu_id 0 -nb gpu -pme gpu -bonded gpu -update gpu"
+        print(f"⚙️  Using GPU {gpu_id} for production MD (compute mode: {args.compute}).")
+    else:
+        print("⚙️  No GPU selected; running production MD on CPU only.")
+
+    if use_gpu:
+        run_command_gpu(md_cmd, cwd=directory, gpu_id=gpu_id, threads=available_threads)
+    else:
+        run_command_cpu(md_cmd, cwd=directory)
 
     print("✅ Production MD complete.\n")
-
 
     # ============================================================
     # 🧠 9. Final Trajectory Generation (Delegates to STEP A)

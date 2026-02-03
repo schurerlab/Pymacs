@@ -319,6 +319,96 @@ Typical actions:
 - GPU-ready execution (if available)
 - thread tuning via environment and script prompts
 
+
+## 🔁 Restarting / Resuming Production MD (Checkpoint-Safe Mode)
+
+PyMACS supports **checkpoint-safe resumption** of production molecular dynamics runs using standard GROMACS restart mechanics. This is intended for runs interrupted by walltime limits, node failures, or manual termination.
+
+> **Key idea:** the production length is stored in `md_0_1.tpr`.  
+> On restart, **GROMACS uses the existing `.tpr` + `.cpt`**, and **does not read `md.mdp`**.
+
+---
+
+### ✅ Requirements (files that must exist)
+
+To resume production, your run folder must contain:
+
+- `md_0_1.tpr` — production input (created by `gmx grompp`)
+- `md_0_1.cpt` — production checkpoint (written during `gmx mdrun`)
+
+Optional but common:
+- `md_0_1.xtc`, `md_0_1.edr`, `md_0_1.log` (existing outputs)
+
+---
+
+### 🚀 Resume production only (GPU)
+
+Use this when you want to **skip EM/NVT/NPT** and simply continue production.
+
+```bash
+conda activate mdanalysis
+
+python 2_AutomateGromacs.py   --mode ligand   --ligand UNK   --compute GPU   --gpu 0   --production_only   --resume   --headless   --ns 250
+```
+
+#### Do I need `--ns` for restarts?
+- **Conceptually: NO.** A restart uses `md_0_1.tpr`, so the simulation continues with whatever length is already encoded in that `.tpr`.
+- **Practically (current CLI behavior): YES for headless runs.** In the current script, `--ns` avoids an interactive prompt.  
+  **To ensure PyMACS does not alter your `.tpr`**, set `--ns` to the *original* runtime (e.g., `250`) or **any value that is ≤ your existing `.tpr` length**.
+
+> If you do not want PyMACS to even *attempt* any TPR extension logic, you can:
+> - keep `--ns` equal to the original run length (recommended), OR
+> - remove the extension call in `maybe_resume_production_only()` (dev option), OR
+> - add a future flag such as `--no_extend` (recommended enhancement).
+
+---
+
+### 🧠 Resume production only (CPU)
+
+```bash
+conda activate mdanalysis
+
+python 2_AutomateGromacs.py   --mode ligand   --ligand UNK   --compute CPU   --production_only   --resume   --headless   --ns 250
+```
+
+---
+
+### 🧯 Force a clean restart (ignore checkpoint)
+
+If you want PyMACS to **not resume**, even if a checkpoint exists:
+
+```bash
+conda activate mdanalysis
+
+python 2_AutomateGromacs.py \
+  --mode ligand \
+  --ligand UNK \
+  --ns 250 \
+  --compute GPU \
+  --gpu 0 \
+  --headless \
+  --force_restart
+
+```
+
+This will run the normal pipeline stages again (EM → NVT → NPT → Production).
+
+---
+
+### 🔎 Optional: verify planned production length in the current `.tpr`
+
+If you want to confirm what your `md_0_1.tpr` is configured to run:
+
+```bash
+gmx dump -s md_0_1.tpr | grep -E "delta_t|nsteps"
+```
+
+Total production time (ns) is:
+
+- **time (ns) = nsteps × delta_t(ps) / 1000**
+
+---
+
 ### 📊 Step 3A — Analysis (`3A_AutomateGromacs.py`)
 Typical actions (workflow-dependent):
 - RMSD / RMSF
@@ -414,6 +504,9 @@ Typical flow:
 - production MD (duration often selected interactively)
 
 ---
+
+> **Need to resume a crashed/paused production run?** See **“🔁 Restarting / Resuming Production MD (Checkpoint-Safe Mode)”** above.
+
 
 ### 📊 Step 3A — Analysis (`3A_AutomateGromacs.py`)
 
