@@ -536,6 +536,39 @@ def set_env(gpu_id:int, threads:int, offset:int):
     return env
 
 
+
+
+def detect_ligand_from_cgenff():
+    """
+    Detect ligand name from *.cgenff.mol2 file.
+    Returns ligand code (uppercase) or None.
+    """
+    mol2_files = [
+        f for f in os.listdir(".")
+        if f.lower().endswith(".cgenff.mol2")
+    ]
+
+    if not mol2_files:
+        return None
+
+    if len(mol2_files) > 1:
+        print("⚠️ Multiple CGenFF MOL2 files detected:")
+        for i, f in enumerate(mol2_files):
+            print(f"  [{i}] {f}")
+        try:
+            idx = int(input("Select ligand MOL2 index [default 0]: ").strip() or "0")
+            fname = mol2_files[idx]
+        except Exception:
+            fname = mol2_files[0]
+    else:
+        fname = mol2_files[0]
+
+    ligand = fname.split(".cgenff.mol2")[0]
+    return ligand.upper()
+
+
+
+
 def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns, use_gpu, args):
     """
     Runs full MD simulation setup on a specified GPU, with dynamic MDP configuration.
@@ -1208,6 +1241,7 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
 
 
 
+
 if __name__ == "__main__":
     args = parse_args()
     print_numa_summary()
@@ -1270,19 +1304,43 @@ if __name__ == "__main__":
             exit(1)
         simulation_type = sim_map[sim_choice]
 
-    # Ligand code
+    # ─── Ligand code (auto-detect + confirm) ──────────────────
     ligand_code = None
+
     if simulation_type.lower() in ["ligand:protein", "ligand", "protac"]:
 
-
+        # CLI always wins
         if args.ligand:
             ligand_code = args.ligand.upper()
+            print(f"🧬 Using ligand from CLI: {ligand_code}")
+
         else:
-            ligand_code_input = input("Enter the 3-letter ligand code (e.g., PTC): ").strip().upper()
-            if len(ligand_code_input) == 0:
-                print("❌ Ligand code is required for this simulation type.")
-                exit(1)
-            ligand_code = ligand_code_input
+            detected = detect_ligand_from_cgenff()
+
+            if detected:
+                ans = input(
+                    f"🔍 Detected ligand '{detected}' from CGenFF files. "
+                    "Use this ligand? [Y/n]: "
+                ).strip().lower()
+
+                if ans in ("", "y", "yes"):
+                    ligand_code = detected
+                else:
+                    ligand_code = input(
+                        "Enter the 3-letter ligand code: "
+                    ).strip().upper()
+
+            else:
+                ligand_code = input(
+                    "Enter the 3-letter ligand code: "
+                ).strip().upper()
+
+        if not ligand_code:
+            print("❌ Ligand code is required for this simulation type.")
+            exit(1)
+
+    print(f"🧬 Final ligand selection: {ligand_code}")
+
 
     # Production length
     if args.ns is not None:
