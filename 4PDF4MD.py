@@ -181,8 +181,9 @@ def generate_rdkit_hero_image(smiles, width=900, height=900):
     Generates a stylized 2D ligand image from a SMILES string.
     """
     mol = Chem.MolFromSmiles(smiles)
-    if not mol:
-        raise ValueError("Invalid SMILES string provided.")
+    mol = Chem.AddHs(mol, addCoords=True)
+
+
 
     # Compute 2D coordinates for the molecule
     Chem.rdDepictor.Compute2DCoords(mol)
@@ -444,57 +445,44 @@ Narrow peaks suggest stable geometry; broad peaks indicate dynamic or transient 
 # HERO IMAGE AS SVG
 # ============================================================
 def generate_rdkit_hero_image_as_svg(mol2_file, width=900, height=900, use_color=True):
-    """
-    Generates a stylized 2D ligand image as SVG from a .mol2 file using Open Babel and RDKit.
-    """
-    # Convert .mol2 to SMILES using Open Babel
-    try:
-        result = subprocess.run(
-            ["obabel", mol2_file, "-osmi", "-xk"],  # Open Babel command
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True
-        )
-        smiles = result.stdout.strip()
-        if not smiles:
-            raise ValueError(f"Open Babel failed to generate SMILES for {mol2_file}")
-    except FileNotFoundError:
-        raise FileNotFoundError("Open Babel (obabel) is not installed or not in PATH.")
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Open Babel error: {e.stderr.strip()}")
+    result = subprocess.run(
+        ["obabel", mol2_file, "-osmi", "-xk"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=True
+    )
 
-    # Generate the RDKit molecule from the SMILES string
-    mol = Chem.MolFromSmiles(smiles)
-    if not mol:
+    smiles = result.stdout.strip().split()[0]  # 🔑 STRIP UNK
+
+    mol = Chem.MolFromSmiles(smiles, sanitize=False)
+    if mol is None:
         raise ValueError(f"RDKit failed to parse SMILES: {smiles}")
 
-    # Compute 2D coordinates for the molecule
+    Chem.SanitizeMol(
+        mol,
+        sanitizeOps=Chem.SANITIZE_ALL ^ Chem.SANITIZE_PROPERTIES
+    )
+
     Chem.rdDepictor.Compute2DCoords(mol)
 
-    # Set up the drawing options for a more stylized appearance
     drawer = rdMolDraw2D.MolDraw2DSVG(width, height)
     options = drawer.drawOptions()
-    options.bondLineWidth = 2  # Thicker bonds
-    options.addAtomIndices = False  # No atom indices
-    options.fixedBondLength = 25  # Standardize bond lengths
-    options.dotsPerAngstrom = 100  # High resolution
+    options.bondLineWidth = 2
+    options.fixedBondLength = 25
+    options.dotsPerAngstrom = 100
 
-    if use_color:
-        # Use the default color palette for atoms
-        pass  # No need to call useBWAtomPalette for color mode
-    else:
-        options.useBWAtomPalette()  # Black-and-white atom palette for publication-ready images
-
-    # Draw the molecule
     drawer.DrawMolecule(mol)
     drawer.FinishDrawing()
 
-    # Save the SVG to a temporary file
     out = tempfile.NamedTemporaryFile(delete=False, suffix=".svg").name
     with open(out, "w") as f:
         f.write(drawer.GetDrawingText())
+
     return out
+
+
+
 
 # ============================================================
 if __name__ == "__main__":
