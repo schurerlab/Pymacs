@@ -447,19 +447,33 @@ def run_command(command, cwd=None, input_text=None):
     """Runs a shell command in the given directory with optional input and exits on failure."""
     print(f"\n🔹 Running command: {command}")
     print(f"📂 In directory: {cwd if cwd else os.getcwd()}")
+
     try:
-        result = subprocess.run(command, shell=True, cwd=cwd, text=True, capture_output=True, input=input_text)
+        result = subprocess.run(
+            command,
+            shell=True,
+            cwd=cwd,
+            input=input_text,
+            capture_output=True,
+            encoding="utf-8",     # ← force UTF-8 decoding
+            errors="replace"      # ← prevent crash if weird byte appears
+        )
+
         print(f"📜 STDOUT:\n{result.stdout}")
+
         if result.returncode != 0:
             print(f"❌ Error running command: {command}")
             print(f"🔺 STDERR: {result.stderr}")
             print("⚠️ Exiting script due to failure.")
             exit(1)
+
     except Exception as e:
         print(f"❌ Exception occurred while running command: {command}\n{str(e)}")
         print("⚠️ Exiting script due to failure.")
         exit(1)
+
     return True
+
 
 def detect_forcefield(directory):
     """Detects if a CHARMM forcefield directory exists in the working directory."""

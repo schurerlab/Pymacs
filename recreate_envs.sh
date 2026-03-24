@@ -7,12 +7,12 @@
 set -euo pipefail
 
 # Check for environment files
-if [[ ! -f "cgenff_environment.yml" ]]; then
+if [[ ! -f "environment_cgenff.yml" ]]; then
   echo "❌ Missing: cgenff_environment.yml"
   exit 1
 fi
 
-if [[ ! -f "mdanalysis_environment.yml" ]]; then
+if [[ ! -f "environment_mdanalysis.yml" ]]; then
   echo "❌ Missing: mdanalysis_environment.yml"
   exit 1
 fi
@@ -21,13 +21,13 @@ echo "📦 Creating Conda environments..."
 
 # Create cgenff environment
 echo "➡️  Creating environment: cgenff"
-conda env create -f cgenff_environment.yml || {
+conda env create -f environment_cgenff.yml || {
   echo "⚠️  Environment 'cgenff' already exists — skipping..."
 }
 
 # Create mdanalysis environment
 echo "➡️  Creating environment: mdanalysis"
-conda env create -f mdanalysis_environment.yml || {
+conda env create -f environment_mdanalysis.yml || {
   echo "⚠️  Environment 'mdanalysis' already exists — skipping..."
 }
 

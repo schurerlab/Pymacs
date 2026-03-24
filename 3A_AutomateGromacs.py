@@ -202,8 +202,8 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--min_contact_frac", type=float, default=0.05,
-    help="Minimum fraction of frames a residue must contact ligand to appear in plots (default 0.05 = 5%)."
+    "--min_contact_frac", type=float, default=0.10,
+    help="Minimum fraction of frames a residue must contact ligand to appear in plots (default 0.10 = 10%)."
 )
 
 parser.add_argument(
@@ -228,8 +228,8 @@ parser.add_argument(
 
 # ------------------ NETWORX-compatible flags ------------------
 parser.add_argument(
-    "--minfrac", type=float, default=0.05,
-    help="Minimum fraction of frames a residue must contact ligand (NETWORX threshold)."
+    "--minfrac", type=float, default=None,
+    help="Minimum fraction of frames a residue must contact ligand (NETWORX threshold, default 0.10 = 10%)."
 )
 
 parser.add_argument(
@@ -353,11 +353,11 @@ args.net_out = os.path.join(NET_OUTDIR, lig_code)
 
 
 # If no --minfrac provided explicitly → ask
-if "--minfrac" not in vars(args) or args.minfrac is None:
+if args.minfrac is None:
     args.minfrac = ask(
-        f"📊 Minimum fraction of frames for residue inclusion [0.0–1.0] (default 0.05): ",
+        "📊 Minimum fraction of frames for residue inclusion [0.0–1.0] (default 0.10): ",
         float,
-        default=0.05
+        default=0.10
     )
 
 # If ellipse radii were not provided → ask interactively
@@ -840,8 +840,13 @@ if not (file_exists("binding_pocket_only.xtc") and file_exists("binding_pocket_o
     print("🔬 Extracting binding pocket using MDTraj...")
 
     traj = md.load("Final_Trajectory.xtc", top="Final_Trajectory.pdb")
-    lig_atoms = traj.topology.select(f"resname {lig}")
+
+    # IMPORTANT: quote resname (needed for digit-leading ligands like 4PT)
+    lig_sel = "resname == " + repr(lig)
+    lig_atoms = traj.topology.select(lig_sel)
+
     prot_atoms = traj.topology.select("protein")
+
 
     if len(lig_atoms) == 0:
         raise SystemExit(f"❌ Ligand {lig} not found in Final_Trajectory.pdb.")
@@ -865,8 +870,9 @@ if not (file_exists("binding_pocket_only.xtc") and file_exists("binding_pocket_o
     print(f"🎯 Binding pocket contains {len(pocket_res)} residues.")
 
     sel = traj.topology.select(
-        "resid " + " ".join(map(str, pocket_res)) + f" or resname {lig}"
+        "resid " + " ".join(map(str, pocket_res)) + " or " + ("resname == " + repr(lig))
     )
+
 
     pocket = traj.atom_slice(sel)
 
@@ -903,7 +909,10 @@ u_pocket = mda.Universe("binding_pocket_only.pdb")
 # Extract ligand
 lig_atomgroup = u_pocket.select_atoms(f"resname {ligand_code}")
 if lig_atomgroup.n_atoms == 0:
+    # Debug: show what resnames MDAnalysis thinks exist
+    print("DEBUG pocket resnames:", sorted(set(u_pocket.residues.resnames)))
     raise SystemExit(f"❌ Could not find ligand '{ligand_code}' in binding_pocket_only.pdb")
+
 
 # All protein residues in the pocket
 protein_residues = u_pocket.select_atoms("protein").residues
@@ -1026,7 +1035,7 @@ def get_aligned_traj_and_ligand():
 
     lig_resname = ligand_code.upper()
 
-    atoms = traj.topology.select(f"resname {lig_resname}")
+    atoms = traj.topology.select("resname == " + repr(lig_resname))
     if len(atoms) == 0:
         raise RuntimeError(
             f"❌ Ligand '{lig_resname}' not found in trajectory.\n"
