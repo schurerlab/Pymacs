@@ -1863,7 +1863,6 @@ MIN_CONTACT_FRAC = float(args.min_contact_frac)
 interaction_data = []          # (Time_ps, Residue)
 framewise_interaction_rows = []  # (Time_ns, Residue, Type)
 
-
 # ============================================================
 # STEP E1 — CONTACT DETECTION (RESIDUE LEVEL)
 # ============================================================
@@ -1872,150 +1871,244 @@ phase("STEP E1 — Pocket Contact Detection")
 
 interaction_data = []
 
-for ts in tqdm(u.trajectory, desc="🔍 Detecting contacts"):
-    time_ps = ts.time
+try:
+    if pocket_ligand.n_atoms == 0:
+        print(f"⚠️ No ligand atoms found for resname {lig_resname}. Skipping STEP E1/E1A/E1B.")
+    elif pocket_protein.n_atoms == 0:
+        print("⚠️ No protein atoms found in binding pocket selection. Skipping STEP E1/E1A/E1B.")
+    else:
+        for ts in tqdm(u.trajectory, desc="🔍 Detecting contacts"):
+            time_ps = ts.time
 
-    # Compute protein–ligand distances
-    dist_mat = distances.distance_array(
-        pocket_ligand.positions, pocket_protein.positions
-    )
+            # Compute protein–ligand distances
+            dist_mat = distances.distance_array(
+                pocket_ligand.positions,
+                pocket_protein.positions
+            )
 
-    # Boolean mask of protein atoms within cutoff
-    contact_mask = (dist_mat < CONTACT_CUTOFF).any(axis=0)
+            # For each protein residue, find closest ligand atom
+            for res in pocket_protein.residues:
+                atom_indices = res.atoms.indices
 
-    # For each protein residue, find closest ligand atom
-    for res in pocket_protein.residues:
-        atom_indices = res.atoms.indices
-        dists = dist_mat[:, atom_indices]  # (lig_atoms, res_atoms)
+                # Guard against empty residues
+                if len(atom_indices) == 0:
+                    continue
 
-        ligand_atom_idx, protein_atom_idx = np.unravel_index(
-            np.argmin(dists), dists.shape
-        )
+                dists = dist_mat[:, atom_indices]  # shape = (lig_atoms, res_atoms)
 
-        min_dist = dists[ligand_atom_idx, protein_atom_idx]
+                # Guard against malformed empty distance slices
+                if dists.size == 0:
+                    continue
 
-        if min_dist < CONTACT_CUTOFF:
-            ligand_atom = pocket_ligand.atoms[ligand_atom_idx]
-            protein_atom = res.atoms[protein_atom_idx]
+                ligand_atom_idx, protein_atom_idx = np.unravel_index(
+                    np.argmin(dists),
+                    dists.shape
+                )
 
-            interaction_data.append((
-                time_ps,
-                f"{res.resname}{res.resid}",
-                ligand_atom.name,
-                ligand_atom.index,
-                protein_atom.name,
-                protein_atom.index,
-                float(min_dist)
-            ))
+                min_dist = dists[ligand_atom_idx, protein_atom_idx]
+
+                if min_dist < CONTACT_CUTOFF:
+                    ligand_atom = pocket_ligand.atoms[ligand_atom_idx]
+                    protein_atom = res.atoms[protein_atom_idx]
+
+                    interaction_data.append((
+                        time_ps,
+                        f"{res.resname}{res.resid}",
+                        ligand_atom.name,
+                        ligand_atom.index,
+                        protein_atom.name,
+                        protein_atom.index,
+                        float(min_dist)
+                    ))
+
+except Exception as e:
+    print(f"⚠️ STEP E1 contact detection failed — continuing pipeline.")
+    print(f"   ↳ {type(e).__name__}: {e}")
 
 
 # ============================================================
 # DATAFRAME CONSTRUCTION
 # ============================================================
 
-interaction_df = pd.DataFrame(
-    interaction_data,
-    columns=[
+if len(interaction_data) == 0:
+    print("⚠️ No ligand–protein contacts detected under current cutoff.")
+    interaction_df = pd.DataFrame(columns=[
         "Time_ps", "Residue",
         "LigAtomName", "LigAtomIndex",
         "ProtAtomName", "ProtAtomIndex",
-        "Distance"
-    ]
+        "Distance", "Time_ns", "ResidNum"
+    ])
+else:
+    interaction_df = pd.DataFrame(
+        interaction_data,
+        columns=[
+            "Time_ps", "Residue",
+            "LigAtomName", "LigAtomIndex",
+            "ProtAtomName", "ProtAtomIndex",
+            "Distance"
+        ]
+    )
+
+    interaction_df["Time_ns"] = interaction_df["Time_ps"] / 1000.0
+
+    # Extract numeric residue number for sorting
+    interaction_df["ResidNum"] = (
+        interaction_df["Residue"]
+        .str.extract(r"(\d+)")
+        .astype(int)
+    )
+
+# Save full framewise contacts whether empty or not
+interaction_df.to_csv(
+    os.path.join(OUTPUT_DIR, "AllContacts_Framewise.csv"),
+    index=False
 )
 
-interaction_df["Time_ns"] = interaction_df["Time_ps"] / 1000.0
-
-# Extract numeric residue number for sorting
-interaction_df["ResidNum"] = (
-    interaction_df["Residue"]
-    .str.extract(r"(\d+)")
-    .astype(int)
-)
+print(f"📊 interaction_df rows: {len(interaction_df)}")
+print(f"📊 unique contacting residues: {interaction_df['Residue'].nunique() if not interaction_df.empty else 0}")
 
 
 # ============================================================
 # FILTER BY CONTACT PERSISTENCE
 # ============================================================
 
-counts = interaction_df["Residue"].value_counts()
-keep_res = counts[counts >= total_frames * MIN_CONTACT_FRAC].index
-
-filtered_df = interaction_df[interaction_df["Residue"].isin(keep_res)].copy()
+if interaction_df.empty:
+    keep_res = []
+    filtered_df = interaction_df.copy()
+else:
+    counts = interaction_df["Residue"].value_counts()
+    keep_res = counts[counts >= total_frames * MIN_CONTACT_FRAC].index
+    filtered_df = interaction_df[interaction_df["Residue"].isin(keep_res)].copy()
 
 filtered_df.to_csv(
     os.path.join(OUTPUT_DIR, "FilteredContacts_Framewise.csv"),
     index=False
 )
 
+print(f"📊 residues passing persistence filter ({MIN_CONTACT_FRAC:.1%}): {len(keep_res)}")
+print(f"📊 filtered_df rows: {len(filtered_df)}")
+
 
 # ============================================================
 # STEP E1A — CONTACT HEATMAP (NUMERICALLY SORTED)
 # ============================================================
 
-pivot = filtered_df.pivot_table(
-    index=["ResidNum", "Residue"],
-    columns="Time_ns",
-    aggfunc="size",
-    fill_value=0
-)
+phase("STEP E1A — Contact Heatmap")
 
-# Sort residues numerically
-pivot = pivot.sort_index(level="ResidNum")
+try:
+    if filtered_df.empty:
+        print("⚠️ No persistent contacts found — skipping STEP E1A.")
+    else:
+        pivot = filtered_df.pivot_table(
+            index=["ResidNum", "Residue"],
+            columns="Time_ns",
+            aggfunc="size",
+            fill_value=0
+        )
 
-# Drop numeric index level (keep clean labels)
-pivot.index = pivot.index.get_level_values("Residue")
+        if pivot.empty or pivot.shape[0] == 0 or pivot.shape[1] == 0:
+            print("⚠️ Empty pivot table — skipping STEP E1A.")
+        else:
+            # Sort residues numerically
+            pivot = pivot.sort_index(level="ResidNum")
 
-plt.figure(figsize=(16, 9))
-sns.heatmap(pivot, cmap="coolwarm")
-plt.title(f"{compound_name}–{chain} Contact Map (Binding Pocket Only)")
-plt.xlabel("Time (ns)")
-plt.ylabel("Residue")
+            # Drop numeric index level (keep clean labels)
+            pivot.index = pivot.index.get_level_values("Residue")
 
-savefig(
-    os.path.join(
-        OUTPUT_DIR,
-        f"{lig_resname}_contact_map_residue_time.png"
-    )
-)
+            plt.figure(figsize=(16, 9))
+            sns.heatmap(pivot, cmap="coolwarm")
+            plt.title(f"{compound_name}–{chain} Contact Map (Binding Pocket Only)")
+            plt.xlabel("Time (ns)")
+            plt.ylabel("Residue")
+
+            savefig(
+                os.path.join(
+                    OUTPUT_DIR,
+                    f"{lig_resname}_contact_map_residue_time.png"
+                )
+            )
+
+            # Optional: save pivot used for plotting
+            pivot.to_csv(
+                os.path.join(
+                    OUTPUT_DIR,
+                    f"{lig_resname}_contact_map_residue_time.csv"
+                )
+            )
+
+            print("✅ STEP E1A complete.")
+
+except Exception as e:
+    print("⚠️ STEP E1A failed — continuing pipeline.")
+    print(f"   ↳ {type(e).__name__}: {e}")
 
 
 # ============================================================
 # STEP E1B — CONTACT FREQUENCY BARPLOT (MATCHING ORDER)
 # ============================================================
 
-freq = (
-    filtered_df
-    .drop_duplicates(["Residue", "ResidNum", "Time_ns"])
-    .groupby(["ResidNum", "Residue"])
-    .size()
-    .sort_index(level="ResidNum")
-)
+phase("STEP E1B — Contact Frequency Barplot")
 
-# Clean index for plotting
-freq.index = freq.index.get_level_values("Residue")
+try:
+    if filtered_df.empty:
+        print("⚠️ No persistent contacts found — skipping STEP E1B.")
+    else:
+        freq = (
+            filtered_df
+            .drop_duplicates(["Residue", "ResidNum", "Time_ns"])
+            .groupby(["ResidNum", "Residue"])
+            .size()
+            .sort_index(level="ResidNum")
+        )
 
-# Convert counts → percent of total frames (more informative)
-freq_pct = (freq.astype(float) / float(total_frames)) * 100.0
+        if freq.empty:
+            print("⚠️ Frequency table is empty — skipping STEP E1B.")
+        else:
+            # Clean index for plotting
+            freq.index = freq.index.get_level_values("Residue")
 
-plt.figure(figsize=(8, 12))
-ax = freq_pct.plot(kind="barh", color=MIAMI_ORANGE)
-ax.set_title(f"{compound_name}-{chain} Contact Frequency")
-ax.set_xlabel("Percent of frames (%)")
-ax.set_xlim(0, 100)
+            # Convert counts → percent of total frames
+            freq_pct = (freq.astype(float) / float(total_frames)) * 100.0
 
-# annotate bars with percent values
-for p in ax.patches:
-    width = p.get_width()
-    if np.isfinite(width):
-        ax.text(width + 0.8, p.get_y() + p.get_height() / 2,
-                f"{width:.1f}%", va="center", fontsize=8)
+            # Save numeric table
+            freq_pct.to_csv(
+                os.path.join(
+                    OUTPUT_DIR,
+                    f"{lig_resname}_contact_frequency_filtered.csv"
+                ),
+                header=["PercentFrames"]
+            )
 
-savefig(
-    os.path.join(
-        OUTPUT_DIR,
-        f"{lig_resname}_contact_frequency_filtered.png"
-    )
-)
+            plt.figure(figsize=(8, 12))
+            ax = freq_pct.plot(kind="barh", color=MIAMI_ORANGE)
+            ax.set_title(f"{compound_name}-{chain} Contact Frequency")
+            ax.set_xlabel("Percent of frames (%)")
+            ax.set_xlim(0, 100)
+
+            # Annotate bars
+            for p in ax.patches:
+                width = p.get_width()
+                if np.isfinite(width):
+                    ax.text(
+                        width + 0.8,
+                        p.get_y() + p.get_height() / 2,
+                        f"{width:.1f}%",
+                        va="center",
+                        fontsize=8
+                    )
+
+            savefig(
+                os.path.join(
+                    OUTPUT_DIR,
+                    f"{lig_resname}_contact_frequency_filtered.png"
+                )
+            )
+
+            print("✅ STEP E1B complete.")
+
+except Exception as e:
+    print("⚠️ STEP E1B failed — continuing pipeline.")
+    print(f"   ↳ {type(e).__name__}: {e}")
 
 # ============================================================
 # STEP E2 — INTERACTION TYPE CLASSIFICATION (SAFE SINGLE THREAD)
