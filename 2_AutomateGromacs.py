@@ -135,12 +135,13 @@ import time
 import multiprocessing, os, subprocess, time
 import shutil
 import os
+import json
 
 def parse_args():
     p = argparse.ArgumentParser(
         description="Automated GROMACS Step 2: MD equilibration + production run"
     )
-    p.add_argument("--mode", choices=["ligand", "protein", "protac"], required=False)
+    p.add_argument("--mode", choices=["ligand", "protein", "peptide", "protac"], required=False)
     p.add_argument("--ligand", type=str, help="3-letter ligand code (required for ligand or protac modes)")
     p.add_argument("--ns", type=float, default=None, help="Production length in nanoseconds (default 50)")
     p.add_argument("--gpu", type=int, help="GPU ID (optional; auto-detected if omitted)")
@@ -164,9 +165,10 @@ def parse_args():
         print("\nPlease select the simulation mode:")
         print("  1. ligand")
         print("  2. protein")
-        print("  3. protac")
-        choice = input("Enter choice (1–3): ").strip()
-        args.mode = {"1": "ligand", "2": "protein", "3": "protac"}.get(choice, "protein")
+        print("  3. peptide")
+        print("  4. protac")
+        choice = input("Enter choice (1–4): ").strip()
+        args.mode = {"1": "ligand", "2": "protein", "3": "peptide", "4": "protac"}.get(choice, "protein")
         print(f"🧠 Selected mode: {args.mode}")
 
     return args
@@ -387,6 +389,158 @@ def run_command_check_rc(command, cwd=None, input_text=None):
 
 
 
+def load_chainmap_json(directory="."):
+    """
+    Load .chainmap.json if present.
+    Returns dict like {"A": "H2B", "B": "H2A", "C": "IE1 Peptide"} or None.
+    """
+    path = os.path.join(directory, ".chainmap.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data:
+            return data
+    except Exception as e:
+        print(f"⚠️ Could not read {path}: {e}")
+    return None
+
+def parse_atomindex_ranges(directory="."):
+    """
+    Parse atomIndex.txt lines like:
+      H2B 1-1485 # ...
+      H2A 1486-3197 # ...
+      IE1 Peptide 3198-3411 # ...
+
+    Allows names with spaces.
+    Returns:
+      [{"name":"H2B","start":1,"end":1485,"length":1485}, ...]
+    """
+    path = os.path.join(directory, "atomIndex.txt")
+    if not os.path.exists(path):
+        return []
+
+    entries = []
+    with open(path, "r") as f:
+        for line in f:
+            s = line.strip()
+            if not s:
+                continue
+
+            # Grab the first numeric range anywhere in the line
+            m = re.search(r"(\d+)-(\d+)", s)
+            if not m:
+                continue
+
+            start = int(m.group(1))
+            end = int(m.group(2))
+
+            # Everything before the range is the name
+            name = s[:m.start()].strip()
+            if not name:
+                continue
+
+            entries.append({
+                "name": name,
+                "start": start,
+                "end": end,
+                "length": end - start + 1
+            })
+
+    return entries
+
+def detect_peptide_from_chainmap(directory="."):
+    """
+    Standalone peptide detector for Step 2 only.
+    Uses:
+      1) .chainmap.json
+      2) atomIndex.txt
+      3) shortest chain heuristic
+      4) protein.pdb fallback if needed
+    """
+    chainmap = load_chainmap_json(directory)
+    atom_entries = parse_atomindex_ranges(directory)
+
+    if not chainmap:
+        print("⚠️ No .chainmap.json found — peptide detection unavailable.")
+        return None
+
+    if atom_entries and len(chainmap) == len(atom_entries):
+        chain_ids = list(chainmap.keys())
+
+        combined = []
+        for i, cid in enumerate(chain_ids):
+            entry = atom_entries[i]
+            combined.append({
+                "chain_id": cid,
+                "name": chainmap[cid],
+                "atom_range": f"{entry['start']}-{entry['end']}",
+                "length": entry["length"]
+            })
+
+        peptide_entry = min(combined, key=lambda x: x["length"])
+        peptide_name = peptide_entry["name"].strip()
+        peptide_group_name = re.sub(r"[^A-Za-z0-9_]", "", peptide_name.replace(" ", "_")) or "Peptide"
+
+        return {
+            "chain_id": peptide_entry["chain_id"],
+            "name": peptide_name,
+            "group_name": peptide_group_name,
+            "atom_range": peptide_entry["atom_range"]
+        }
+
+    print("⚠️ atomIndex.txt parsing mismatch — falling back to protein.pdb residue counts...")
+
+    protein_pdb = os.path.join(directory, "protein.pdb")
+    if not os.path.exists(protein_pdb):
+        print("⚠️ protein.pdb not found — cannot fall back.")
+        return None
+
+    from collections import OrderedDict
+    chain_resids = OrderedDict()
+
+    with open(protein_pdb, "r") as f:
+        for line in f:
+            if not line.startswith("ATOM"):
+                continue
+            chain_id = line[21].strip() or "A"
+            try:
+                resid = int(line[22:26].strip())
+            except ValueError:
+                continue
+            chain_resids.setdefault(chain_id, set()).add(resid)
+
+    if not chain_resids:
+        return None
+
+    shortest_chain = min(chain_resids.items(), key=lambda kv: len(kv[1]))[0]
+    peptide_name = chainmap.get(shortest_chain, "Peptide").strip()
+    peptide_group_name = re.sub(r"[^A-Za-z0-9_]", "", peptide_name.replace(" ", "_")) or "Peptide"
+
+    return {
+        "chain_id": shortest_chain,
+        "name": peptide_name,
+        "group_name": peptide_group_name,
+        "atom_range": None
+    }
+
+    
+
+def save_peptide_chainmap(directory=".", peptide_info=None):
+    """
+    Save a simple peptide cache discovered entirely in Step 2.
+    """
+    if not peptide_info:
+        return
+
+    path = os.path.join(directory, ".chainmap.peptide.json")
+    try:
+        with open(path, "w") as f:
+            json.dump(peptide_info, f, indent=2)
+        print(f"💾 Saved peptide metadata → {path}")
+    except Exception as e:
+        print(f"⚠️ Could not save {path}: {e}")
 
 
 def maybe_resume_production_only(directory, args, gpu_id, pin_offset, threads, use_gpu, target_ns, md_deffnm="md_0_1"):
@@ -791,7 +945,7 @@ def standardize_mdp_groups(mdp_path, coupling_group_str):
         f.writelines(filtered)
 
 
-def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns, use_gpu, args):
+def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns, use_gpu, args, peptide_info=None):
     """
     Runs full MD simulation setup on a specified GPU, with dynamic MDP configuration.
     Includes automatic tc-grps update, nsteps scaling, ligand topology handling,
@@ -1474,22 +1628,63 @@ if __name__ == "__main__":
     print(f"\n📂 Running MD setup in: {simulation_directory} on GPU {gpu_id}")
 
     # Simulation type
-    sim_map = {"1": "Ligand:Protein", "2": "Protein:Protein/Peptide", "3": "PROTAC", "4": "Just Protein"}
+    sim_map = {
+        "1": "Ligand:Protein",
+        "2": "Protein:Protein",
+        "3": "Peptide:Protein",
+        "4": "PROTAC",
+        "5": "Just Protein"
+    }
+
     if args.mode:
-        mode_map = {"ligand": "Ligand:Protein", "protein": "Just Protein", "protac": "PROTAC"}
+        mode_map = {
+            "ligand": "Ligand:Protein",
+            "protein": "Just Protein",
+            "peptide": "Peptide:Protein",
+            "protac": "PROTAC"
+        }
         simulation_type = mode_map.get(args.mode.lower(), args.mode)
 
     else:
         print("\nPlease select the simulation type:")
         print("  1. Ligand:Protein")
-        print("  2. Protein:Protein/Peptide")
-        print("  3. PROTAC")
-        print("  4. Just Protein")
-        sim_choice = input("Enter choice (1-4): ").strip()
-        if sim_choice not in ["1", "2", "3", "4"]:
+        print("  2. Protein:Protein")
+        print("  3. Peptide:Protein")
+        print("  4. PROTAC")
+        print("  5. Just Protein")
+        sim_choice = input("Enter choice (1-5): ").strip()
+        if sim_choice not in ["1", "2", "3", "4", "5"]:
             print("❌ Invalid selection. Exiting.")
             exit(1)
         simulation_type = sim_map[sim_choice]
+    
+    peptide_info = None
+
+    if simulation_type.lower() in ["peptide:protein", "peptide"]:
+        peptide_info = detect_peptide_from_chainmap(simulation_directory)
+
+        if peptide_info:
+            print("\n🧬 Detected peptide from existing chain map:")
+            print(f"   • Chain ID:   {peptide_info['chain_id']}")
+            print(f"   • Name:       {peptide_info['name']}")
+            print(f"   • Atom range: {peptide_info['atom_range']}")
+            print(f"   • Group name: {peptide_info['group_name']}")
+
+            if not args.headless:
+                ans = input("Use this peptide assignment? [Y/n]: ").strip().lower()
+                if ans in ["n", "no"]:
+                    print("❌ Peptide mode requires a valid peptide assignment from .chainmap.json + atomIndex.txt")
+                    exit(1)
+
+            save_peptide_chainmap(simulation_directory, peptide_info)
+
+        else:
+            print("❌ Could not detect peptide automatically.")
+            print("   Peptide mode requires:")
+            print("   • .chainmap.json")
+            print("   • atomIndex.txt")
+            print("   • shortest chain logic to identify peptide")
+            exit(1)
 
     # ─── Ligand code (auto-detect + confirm) ──────────────────
     ligand_code = None
@@ -1550,7 +1745,16 @@ if __name__ == "__main__":
     print(f"⚙️ Compute mode selected: {'GPU-accelerated' if use_gpu else 'CPU-only'}")
 
 
-    setup_md(simulation_directory, gpu_id, ligand_code, simulation_type, simulation_time_ns, use_gpu, args)
+    setup_md(
+        simulation_directory,
+        gpu_id,
+        ligand_code,
+        simulation_type,
+        simulation_time_ns,
+        use_gpu,
+        args,
+        peptide_info=peptide_info
+    )
 
 
 
