@@ -39,7 +39,7 @@ from matplotlib.patches import Patch, FancyArrowPatch
 from matplotlib.lines import Line2D
 from matplotlib.collections import LineCollection
 from matplotlib.colors import to_rgba
-
+import json
 from rdkit import Chem
 from rdkit.Chem import rdDepictor
 import re
@@ -489,6 +489,7 @@ RESIDUE_COLORS = {
     "positive":    "#C5F1FF",  # soft cyan
     "negative":    "#FFCBC5",  # soft salmon
     "polar":       "#E8E8E8",  # soft gray
+    "peptide":     "#D8B4FE",  # soft violet
 }
 
 # --------------------------------------------------------------------
@@ -503,7 +504,7 @@ def parse_args():
     p.add_argument(
         "-l", "--ligand",
         type=str,
-        help="Ligand residue name (e.g., A1D)"
+        help="Ligand residue name (e.g., A1D) or peptide group name."
     )
 
     p.add_argument(
@@ -520,6 +521,12 @@ def parse_args():
         help="Output base filename (without extension)"
     )
 
+    p.add_argument(
+        "--mode",
+        choices=["auto", "ligand", "peptide"],
+        default="auto",
+        help="Auto-detect peptide mode from .chainmap.peptide.json, or force ligand/peptide rendering."
+    )
 
     # NEW — allow node-only panel
     p.add_argument(
@@ -528,15 +535,20 @@ def parse_args():
         help="Render network diagram without edges (node-only mode)."
     )
 
-
     return p.parse_args()
 
 
 def ask_if_missing(args):
     print("\n🧬 NETWORX — Two-Panel Journal Mode\n")
 
+    chainmap = infer_mode_from_chainmap(".")
+
     if not args.ligand:
-        args.ligand = input("Ligand resname (e.g., A1D): ").strip()
+        if chainmap.get("is_peptide"):
+            args.ligand = chainmap.get("group_name") or chainmap.get("name") or "PEPTIDE"
+            print(f"🧬 Auto-detected peptide label from {chainmap['path']}: {args.ligand}")
+        else:
+            args.ligand = input("Ligand resname (e.g., A1D): ").strip()
 
     if args.minfrac is None:
         v = input("Minimum contact fraction [default 0.10]: ").strip()
@@ -1738,172 +1750,355 @@ def draw_network_panel(ax, ligand, df_filt, residue_to_ligatom):
                 ha="center", va="center",
                 zorder=7)
 
-def build_two_panel_figure(ligand: str, minfrac: float, output: str, no_edges: bool=False):
+
+
+def infer_mode_from_chainmap(run_dir="."):
+    candidates = [
+        os.path.join(run_dir, ".chainmap.peptide.json"),
+        os.path.join(run_dir, "Analysis_Results", ".chainmap.peptide.json"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            with open(path, "r") as fh:
+                data = json.load(fh)
+            chain_id = str(data.get("chain_id", "")).strip()
+            if not chain_id:
+                raise ValueError(f"Peptide chainmap exists but missing chain_id: {path}")
+            return {
+                "is_peptide": True,
+                "path": path,
+                "chain_id": chain_id,
+                "name": str(data.get("name", "Peptide")).strip(),
+                "group_name": str(data.get("group_name", "PEPTIDE")).strip(),
+                "atom_range": str(data.get("atom_range", "")).strip(),
+            }
+    return {"is_peptide": False}
+
+
+def candidate_topology_files_networx():
+    return [
+        "Final_Trajectory.pdb",
+        "binding_pocket_only.pdb",
+        "protein.pdb",
+    ] + sorted([f for f in os.listdir('.') if f.lower().endswith('.pdb')])
+
+
+def parse_pdb_atom_table_networx(pdb_path):
+    rows = []
+    idx0 = 0
+    with open(pdb_path, "r") as fh:
+        for line in fh:
+            if not line.startswith(("ATOM", "HETATM")):
+                continue
+            atom_name = line[12:16].strip()
+            resname = line[17:20].strip()
+            chain = line[21].strip()
+            resid_raw = line[22:26].strip()
+            try:
+                resid = int(re.sub(r"[^\d\-]", "", resid_raw))
+            except Exception:
+                resid = None
+            rows.append({
+                "index0": idx0,
+                "atom_name": atom_name,
+                "resname": resname,
+                "chain": chain,
+                "resid": resid,
+                "reslabel": f"{resname}{resid}" if resid is not None else f"{resname}{idx0}",
+            })
+            idx0 += 1
+    return pd.DataFrame(rows)
+
+
+def get_topology_atom_table_networx():
+    seen = set()
+    for path in candidate_topology_files_networx():
+        if path in seen:
+            continue
+        seen.add(path)
+        if os.path.exists(path):
+            df = parse_pdb_atom_table_networx(path)
+            if not df.empty:
+                print(f"🔎 Using topology for peptide atom mapping: {path}")
+                return df, path
+    raise FileNotFoundError("Could not find a suitable PDB topology file to map peptide atom indices.")
+
+
+def parse_atom_range_networx(atom_range):
+    if not atom_range or "-" not in atom_range:
+        raise ValueError(f"Invalid atom_range in chainmap: {atom_range!r}")
+    s, e = atom_range.split("-", 1)
+    return int(s), int(e)
+
+
+def build_peptide_index_to_residue_map_networx(chainmap):
+    topo_df, topo_path = get_topology_atom_table_networx()
+    start1, end1 = parse_atom_range_networx(chainmap["atom_range"])
+    start0 = start1 - 1
+    end0 = end1 - 1
+
+    sub = topo_df[(topo_df["index0"] >= start0) & (topo_df["index0"] <= end0)].copy()
+    if sub.empty:
+        raise ValueError(f"No topology atoms overlap peptide atom_range {chainmap['atom_range']} using {topo_path}")
+
+    if chainmap.get("chain_id"):
+        sub_chain = sub[sub["chain"] == chainmap["chain_id"]]
+        if not sub_chain.empty:
+            sub = sub_chain
+
+    return {int(row.index0): row.reslabel for row in sub.itertuples(index=False)}
+
+
+def infer_peptide_pair_summary_networx(df_full, chainmap):
+    if "LigAtomIndex" not in df_full.columns:
+        raise ValueError("InteractionTypes_Framewise.csv missing LigAtomIndex, needed for peptide mode.")
+
+    idx_to_pep_res = build_peptide_index_to_residue_map_networx(chainmap)
+    dfx = df_full.copy()
+    dfx["LigAtomIndex"] = pd.to_numeric(dfx["LigAtomIndex"], errors="coerce")
+    dfx = dfx.dropna(subset=["LigAtomIndex"]).copy()
+    dfx["LigAtomIndex"] = dfx["LigAtomIndex"].astype(int)
+    dfx["PeptideResidue"] = dfx["LigAtomIndex"].map(idx_to_pep_res)
+    dfx = dfx.dropna(subset=["PeptideResidue"]).copy()
+
+    if dfx.empty:
+        raise ValueError("No framewise rows could be mapped from LigAtomIndex to peptide residues.")
+
+    n_frames = int(dfx["Time_ns"].nunique())
+    pair_summary = (dfx.groupby(["PeptideResidue", "Residue", "Type"])["Time_ns"]
+                    .nunique()
+                    .reset_index(name="Frames"))
+    pair_summary["Fraction"] = pair_summary["Frames"] / float(n_frames)
+
+    pair_frac = (dfx.groupby(["PeptideResidue", "Residue"])["Time_ns"]
+                 .nunique()
+                 .reset_index(name="Frames"))
+    pair_frac["Fraction"] = pair_frac["Frames"] / float(n_frames)
+    return dfx, pair_summary, pair_frac, n_frames
+
+
+def draw_peptide_network_networx(ax, pair_summary, pair_frac, minfrac, no_edges=False, title=None):
+    pair_frac = pair_frac[pair_frac["Fraction"] >= minfrac].copy()
+    if pair_frac.empty:
+        raise ValueError(f"No peptide-residue pairs exceed minfrac={minfrac}")
+
+    peptide_res = sorted(pair_frac["PeptideResidue"].unique(), key=residue_number)
+    receptor_res = sorted(pair_frac["Residue"].unique(), key=residue_number)
+
+    pep_weight = pair_frac.groupby("PeptideResidue")["Fraction"].sum().to_dict()
+    rec_weight = pair_frac.groupby("Residue")["Fraction"].sum().to_dict()
+    peptide_res = sorted(peptide_res, key=lambda r: (-pep_weight.get(r, 0), residue_number(r)))
+    receptor_res = sorted(receptor_res, key=lambda r: (-rec_weight.get(r, 0), residue_number(r)))
+
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    left_x, right_x = -5.5, 5.5
+    y_left = np.linspace(8.5, -8.5, len(peptide_res)) if peptide_res else []
+    y_right = np.linspace(8.5, -8.5, len(receptor_res)) if receptor_res else []
+    pep_pos = {res: (left_x, y) for res, y in zip(peptide_res, y_left)}
+    rec_pos = {res: (right_x, y) for res, y in zip(receptor_res, y_right)}
+
+    if not no_edges:
+        for i, row in pair_summary.iterrows():
+            pres, rres = row["PeptideResidue"], row["Residue"]
+            frac = float(row["Fraction"])
+            if frac < minfrac or pres not in pep_pos or rres not in rec_pos:
+                continue
+            x1, y1 = pep_pos[pres]
+            x2, y2 = rec_pos[rres]
+            itype = str(row["Type"])
+            if "H-bond" in itype:
+                col, lw, style = EDGE_HBOND, 2.4, "--"
+            elif "Hydrophobic" in itype:
+                col, lw, style = EDGE_HYDRO, 1.8, "--"
+            elif "Water" in itype:
+                col, lw, style = EDGE_WATER, 1.8, "--"
+            elif "Ionic" in itype:
+                col, lw, style = "#C39BD3", 2.1, "--"
+            else:
+                col, lw, style = "#999999", 1.4, "--"
+            rad = 0.12 if (i % 2 == 0) else -0.12
+            edge = FancyArrowPatch((x1 + 0.55, y1), (x2 - 0.55, y2),
+                                   arrowstyle="-", connectionstyle=f"arc3,rad={rad}",
+                                   linewidth=lw, linestyle=style, color=col, alpha=0.80, zorder=1)
+            ax.add_patch(edge)
+
+        for _, row in pair_frac.iterrows():
+            pres, rres = row["PeptideResidue"], row["Residue"]
+            frac = float(row["Fraction"])
+            if pres not in pep_pos or rres not in rec_pos:
+                continue
+            x1, y1 = pep_pos[pres]
+            x2, y2 = rec_pos[rres]
+            lx, ly = label_point_frac(x1 + 0.55, y1, x2 - 0.55, y2, 0.55)
+            ax.text(lx, ly, f"{frac*100:.0f}%", fontsize=7.5, color="black",
+                    ha="center", va="center", zorder=2,
+                    bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="none", alpha=0.75))
+
+    for res, (x, y) in pep_pos.items():
+        ax.scatter(x, y, s=2500, color=RESIDUE_COLORS["peptide"], edgecolors="black", linewidth=2.0, zorder=3)
+        ax.text(x, y, res, fontsize=9.5, weight="bold", ha="center", va="center", zorder=4)
+
+    for res, (x, y) in rec_pos.items():
+        cat = classify_residue(res)
+        col = RESIDUE_COLORS.get(cat, "#E8E8E8")
+        ax.scatter(x, y, s=2500, color=col, edgecolors="black", linewidth=2.0, zorder=3)
+        ax.text(x, y, res, fontsize=9.5, weight="bold", ha="center", va="center", zorder=4)
+
+    ax.text(left_x, 10.0, "Peptide residues", fontsize=12, weight="bold", ha="center")
+    ax.text(right_x, 10.0, "Protein residues", fontsize=12, weight="bold", ha="center")
+    ax.set_title(title or "Peptide–Protein Residue Interaction Network", fontsize=13, weight="bold")
+
+    handles = [
+        Line2D([0],[0], color=EDGE_HBOND, linestyle="--", linewidth=2.4, label="H-bond"),
+        Line2D([0],[0], color=EDGE_HYDRO, linestyle="--", linewidth=1.8, label="Hydrophobic"),
+        Line2D([0],[0], color=EDGE_WATER, linestyle="--", linewidth=1.8, label="Water bridge"),
+        Line2D([0],[0], color="#C39BD3", linestyle="--", linewidth=2.1, label="Ionic"),
+        Patch(facecolor=RESIDUE_COLORS["peptide"], edgecolor="black", label="Peptide residue"),
+        Patch(facecolor=RESIDUE_COLORS["hydrophobic"], edgecolor="black", label="Hydrophobic residue"),
+        Patch(facecolor=RESIDUE_COLORS["positive"], edgecolor="black", label="Positive residue"),
+        Patch(facecolor=RESIDUE_COLORS["negative"], edgecolor="black", label="Negative residue"),
+        Patch(facecolor=RESIDUE_COLORS["polar"], edgecolor="black", label="Polar residue"),
+    ]
+    ax.legend(handles=handles, fontsize=8, frameon=False, loc="upper center",
+              bbox_to_anchor=(0.5, -0.02), ncol=5)
+
+
+def save_peptide_network_networx(name, chainmap, df_summary, minfrac, no_edges=False, outdir=None):
+    df_full = pd.read_csv(os.path.join(ANALYSIS_DIR, "InteractionTypes_Framewise.csv"))
+    dfx, pair_summary, pair_frac, n_frames = infer_peptide_pair_summary_networx(df_full, chainmap)
+    if outdir is None:
+        outdir = os.path.join(ANALYSIS_DIR, "NETWORX")
+    path = os.path.join(outdir, f"{name}_peptide_network.png")
+    fig, ax = plt.subplots(figsize=(14, 11))
+    draw_peptide_network_networx(ax, pair_summary, pair_frac, minfrac, no_edges=no_edges,
+                         title=f"{chainmap.get('name', 'Peptide')}–Protein Residue Interaction Network")
+    fig.savefig(path, dpi=700, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  ✓ Peptide network saved → {path}")
+    return path
+
+def build_two_panel_figure(ligand: str, minfrac: float, output: str, no_edges: bool=False, mode: str="auto"):
     """
-    Build figures. 'no_edges' is True when --no-edges was specified.
+    Build figures. Auto-detect peptide mode from .chainmap.peptide.json unless forced.
+    Keeps the original ligand NETWORX functionality intact, and swaps to a peptide
+    residue-network only when the peptide sidecar exists.
     """
-    # Write all results into a single directory:
-    # Analysis_Results/NETWORX_Figures/
     outdir = os.path.join(ANALYSIS_DIR, "NETWORX")
     os.makedirs(outdir, exist_ok=True)
 
-    # -----------------------
-    # PANEL A + B DATA
-    # -----------------------
     df_summary, total_frames = load_interaction_summary()
-    residue_to_ligatom = load_residue_ligand_atom_map()
+    chainmap = infer_mode_from_chainmap(".")
+    is_peptide = chainmap.get("is_peptide", False)
+    if mode == "ligand":
+        is_peptide = False
+    elif mode == "peptide":
+        is_peptide = True
+        if not chainmap.get("is_peptide", False):
+            raise RuntimeError("Forced peptide mode, but .chainmap.peptide.json was not found.")
 
-    # --------------------------------------------------
-    # Ensure a single, persistent residue->ligatom mapping:
-    # - load ligand layout (needed for similarity mapping / halogen fallback)
-    # - apply LP mapping and similarity/halogen fixes ONCE here
-    # This avoids situations where one panel uses a different map than another.
-    # --------------------------------------------------
-    atom_positions, atom_elements, bonds, center, parent_map, mol, atom_names = \
-        get_ligand_layout(ligand)
-    # first apply LP mapping (if any), then safe fallback mapping
-    residue_to_ligatom_fixed = resolve_lp_mapping(ligand, residue_to_ligatom)
-    residue_to_ligatom_fixed = fix_edges_to_center_safe(
-        residue_to_ligatom_fixed, atom_positions, atom_elements, center
-    )
-    # quick sanity log
-    n_fixed = sum(1 for r in residue_to_ligatom if residue_to_ligatom.get(r) != residue_to_ligatom_fixed.get(r))
-    print(f"\n🔁 Applied ligand mapping fixes — {n_fixed} residues remapped (persisted for all panels)\n")
-
-    # replace original mapping so subsequent calls use the fixed one
-    residue_to_ligatom = residue_to_ligatom_fixed
-
-    df_filt = df_summary[df_summary["Fraction"] >= minfrac].copy()
-    if df_filt.empty:
-        raise ValueError(f"No residues exceed minfrac={minfrac}")
-
-    # -----------------------
-    # PANEL C DATA — THE ONLY CSV WE ARE ALLOWED TO USE
-    # -----------------------
-    framewise_path = os.path.join(ANALYSIS_DIR, "InteractionTypes_Framewise.csv")
-    df_full = pd.read_csv(framewise_path)
-
-    # Basic validation
-    required_cols = ["Time_ns", "Residue", "Type", "LigAtomName"]
-    for col in required_cols:
-        if col not in df_full.columns:
-            raise ValueError(f"InteractionTypes_Framewise.csv missing required column: {col}")
-
-    # Make ligand atom names consistent
-    df_full["LigAtomName"] = df_full["LigAtomName"].apply(normalize_atom)
-
-    # -----------------------------------------------------------
-    #  COMPUTE FRACTION PER RESIDUE FROM FRAMEWISE DATA ONLY
-    # -----------------------------------------------------------
-    n_frames = df_full["Time_ns"].nunique()
-
-    # frames where each residue appears at least once
-    res_frame_counts = (
-        df_full.groupby("Residue")["Time_ns"]
-        .nunique()
-    )
-
-    # Fraction = (# frames with this residue contact) / (total frames)
-    frac_map = (res_frame_counts / float(n_frames)).to_dict()
-
-    df_full["Fraction"] = df_full["Residue"].map(frac_map).fillna(0.0)
-
-    # store in global so Panel C can use it
-    global MIN_FRACTION
-    MIN_FRACTION = minfrac
-
-    # -----------------------------------------------------------
-    # NEW: use dedicated builders for each panel (clean, testable)
-    # -----------------------------------------------------------
-    # Panel A — bar
     bar_out = make_bar_figure(ligand, df_summary, total_frames, minfrac, outdir, dpi=900)
 
-    # Panel B — collapsed network
-    # pass the fixed mapping so collapsed and expanded panels use identical mapping
-    net_out = make_collapsed_network_figure(ligand, df_filt, residue_to_ligatom, outdir, dpi=900)
+    if is_peptide:
+        print(f"\n🧬 Auto-detected peptide mode from {chainmap['path']}")
+        print(f"   • chain_id   = {chainmap['chain_id']}")
+        print(f"   • name       = {chainmap['name']}")
+        print(f"   • group_name = {chainmap['group_name']}")
+        print(f"   • atom_range = {chainmap['atom_range']}")
 
-    # Panel C — expanded network (prepare ligand layout first)
-    # reuse ligand layout loaded above and call expanded builder with fixed mapping
-    rings, bad_atoms = safe_kekulize_and_get_rings(mol, atom_names)
-    print("Valid rings:", rings)
-    print("Skipped (bad) atoms:", bad_atoms)
+        net_out = save_peptide_network_networx(ligand, chainmap, df_summary, minfrac, no_edges=no_edges, outdir=outdir)
+        exp_out = net_out
+        clean_out = net_out
+    else:
+        residue_to_ligatom = load_residue_ligand_atom_map()
+        atom_positions, atom_elements, bonds, center, parent_map, mol, atom_names =             get_ligand_layout(ligand)
+        residue_to_ligatom_fixed = resolve_lp_mapping(ligand, residue_to_ligatom)
+        residue_to_ligatom_fixed = fix_edges_to_center_safe(
+            residue_to_ligatom_fixed, atom_positions, atom_elements, center
+        )
+        n_fixed = sum(1 for r in residue_to_ligatom if residue_to_ligatom.get(r) != residue_to_ligatom_fixed.get(r))
+        print(f"\n🔁 Applied ligand mapping fixes — {n_fixed} residues remapped (persisted for all panels)\n")
+        residue_to_ligatom = residue_to_ligatom_fixed
 
-    exp_out = make_expanded_network_figure(
-        ligand,
-        df_full=df_full,
-        residue_to_ligatom=residue_to_ligatom,
-        atom_positions=atom_positions,
-        atom_elements=atom_elements,
-        bonds=bonds,
-        mol=mol,
-        atom_names=atom_names,
-        center=center,
-        parent_map=parent_map,
-        outdir=outdir,
-        show_edges=not no_edges,
-        dpi=900
-    )
+        df_filt = df_summary[df_summary["Fraction"] >= minfrac].copy()
+        if df_filt.empty:
+            raise ValueError(f"No residues exceed minfrac={minfrac}")
 
-    # Also save a clean version (nodes-only) for rapid figure export.
-    # Use the public builder but write directly to the clean filename so
-    # it does not overwrite the full expanded image produced above.
-    clean_out = os.path.join(outdir, f"{ligand}_expanded_clean.png")
-    clean_tmp = make_expanded_network_figure(
-        ligand,
-        df_full=df_full,
-        residue_to_ligatom=residue_to_ligatom,
-        atom_positions=atom_positions,
-        atom_elements=atom_elements,
-        bonds=bonds,
-        mol=mol,
-        atom_names=atom_names,
-        center=center,
-        parent_map=parent_map,
-        outdir=outdir,
-        show_edges="single",
-        dpi=900,
-        out_name=clean_out,
-    )
-    print(f"  ✓ Clean expanded network saved → {clean_out}")
+        framewise_path = os.path.join(ANALYSIS_DIR, "InteractionTypes_Framewise.csv")
+        df_full = pd.read_csv(framewise_path)
+        required_cols = ["Time_ns", "Residue", "Type", "LigAtomName"]
+        for col in required_cols:
+            if col not in df_full.columns:
+                raise ValueError(f"InteractionTypes_Framewise.csv missing required column: {col}")
+        df_full["LigAtomName"] = df_full["LigAtomName"].apply(normalize_atom)
 
-    # =============================================================
-    # Combined PDF (Panels A + Expanded C)
-    # =============================================================
+        n_frames = df_full["Time_ns"].nunique()
+        res_frame_counts = df_full.groupby("Residue")["Time_ns"].nunique()
+        frac_map = (res_frame_counts / float(n_frames)).to_dict()
+        df_full["Fraction"] = df_full["Residue"].map(frac_map).fillna(0.0)
+
+        global MIN_FRACTION
+        MIN_FRACTION = minfrac
+
+        net_out = make_collapsed_network_figure(ligand, df_filt, residue_to_ligatom, outdir, dpi=900)
+        rings, bad_atoms = safe_kekulize_and_get_rings(mol, atom_names)
+        print("Valid rings:", rings)
+        print("Skipped (bad) atoms:", bad_atoms)
+
+        exp_out = make_expanded_network_figure(
+            ligand,
+            df_full=df_full,
+            residue_to_ligatom=residue_to_ligatom,
+            atom_positions=atom_positions,
+            atom_elements=atom_elements,
+            bonds=bonds,
+            mol=mol,
+            atom_names=atom_names,
+            center=center,
+            parent_map=parent_map,
+            outdir=outdir,
+            show_edges=not no_edges,
+            dpi=900
+        )
+
+        clean_out = os.path.join(outdir, f"{ligand}_expanded_clean.png")
+        make_expanded_network_figure(
+            ligand,
+            df_full=df_full,
+            residue_to_ligatom=residue_to_ligatom,
+            atom_positions=atom_positions,
+            atom_elements=atom_elements,
+            bonds=bonds,
+            mol=mol,
+            atom_names=atom_names,
+            center=center,
+            parent_map=parent_map,
+            outdir=outdir,
+            show_edges="single",
+            dpi=900,
+            out_name=clean_out,
+        )
+        print(f"  ✓ Clean expanded network saved → {clean_out}")
+
     combined_out = os.path.join(outdir, f"{ligand}_combined.pdf")
     figD = plt.figure(figsize=(12, 16))
     gs = gridspec.GridSpec(2, 1, height_ratios=[0.8, 1.2], hspace=0.25)
-
-    # Panel A (bar plot)
     axD1 = figD.add_subplot(gs[0])
     axD1.imshow(plt.imread(bar_out))
     axD1.axis("off")
-
-    # Panel C (expanded network)
     axD2 = figD.add_subplot(gs[1])
     axD2.imshow(plt.imread(exp_out))
     axD2.axis("off")
-
     figD.savefig(combined_out, dpi=600)
-    plt.close(figD)   # make sure we close the correct figure object
+    plt.close(figD)
 
-    # =============================================================
-    # DONE
-    # =============================================================
     print("\n===================================================")
     print(f"  ✓ Bar plot saved → {bar_out}")
     print(f"  ✓ Collapsed network saved → {net_out}")
     print(f"  ✓ Expanded network saved → {exp_out}")
     print(f"  ✓ Combined PDF saved → {combined_out}")
     print("===================================================")
-
-
-
-
-
-
-
-
-
 
 # --- Minimal loader + figure-builder fallbacks (keeps script self-contained) ---
 def load_interaction_summary():
@@ -2290,8 +2485,16 @@ def make_expanded_network_figure(ligand, df_full, residue_to_ligatom,
 # --------------------------------------------------------------------
 if __name__ == "__main__":
     args = parse_args()
-    if not args.ligand or args.minfrac is None or not args.output:
+    chainmap = infer_mode_from_chainmap(".")
+    if (not args.ligand) or args.minfrac is None or not args.output:
         args = ask_if_missing(args)
 
-    build_two_panel_figure(args.ligand, args.minfrac, args.output, no_edges=args.no_edges)
+    auto_name = args.ligand
+    if not auto_name:
+        if chainmap.get("is_peptide"):
+            auto_name = chainmap.get("group_name", "PEPTIDE")
+        else:
+            auto_name = os.path.basename(os.getcwd())
+
+    build_two_panel_figure(auto_name, args.minfrac, args.output, no_edges=args.no_edges, mode=args.mode)
 
