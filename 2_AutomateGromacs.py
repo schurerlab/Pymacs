@@ -1104,7 +1104,7 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
 
 
 
-        # ============================================================
+    # ============================================================
     # 🧩 5. Build Master Index File (Protein / Ligand / PROTAC)
     # ============================================================
     print("\n🧩 [STEP 5] Building clean index.ndx ...")
@@ -1166,7 +1166,7 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
             print(f"✔ Using existing ligand restraints: {posre}")
 
     # ------------------------------------------------------------
-    # 5C — MODE-SPECIFIC INDEX BUILD (exclusive branches)
+    # 5C — MODE-SPECIFIC INDEX BUILD
     # ------------------------------------------------------------
     simtype = simulation_type.upper().strip()
 
@@ -1183,6 +1183,7 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
         )
 
         expected_group = "Protein"
+        expected_water_group = "Water_and_ions"
         print("✅ index.ndx built (protein only)")
 
     elif simtype == "PROTAC":
@@ -1217,13 +1218,17 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
         )
 
         expected_group = f"Protein_{ligand_code.upper()}"
+        expected_water_group = "Water_and_ions"
         print(f"✅ PROTAC index.ndx built with merged group: {expected_group}")
 
     elif ligand_code:
         # ========================================================
         # LIGAND MODE
+        # KEEP OLD LOGIC THAT PREVIOUSLY WORKED
         # ========================================================
         expected_group = f"Protein_{ligand_code.upper()}"
+        expected_water_group = "Water_and_ions"
+
         print(f"💊 Ligand-bound system → building merged index group {expected_group}")
 
         ndx_input = (
@@ -1239,8 +1244,8 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
         )
 
         print(f"✅ index.ndx built cleanly: {expected_group}")
-        print("   ✔ Fixed-index ligand merge preserved")
-        print("   ✔ Protein-only runs cannot fall into this branch")
+        print("   ✔ Old ligand merge preserved")
+        print("   ✔ Protein-only logic kept separate")
         print("   ✔ tc-grps can safely use this group")
 
     else:
@@ -1257,8 +1262,16 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
         print("❌ FATAL: index.ndx was not created.")
         exit(1)
 
+    missing_groups = []
+
     if not index_has_group(index_path, expected_group):
-        print(f"❌ FATAL: Expected index group '{expected_group}' not found after Step 5.")
+        missing_groups.append(expected_group)
+
+    if not index_has_group(index_path, expected_water_group):
+        missing_groups.append(expected_water_group)
+
+    if missing_groups:
+        print(f"❌ FATAL: Missing expected index group(s): {', '.join(missing_groups)}")
         print("📋 Groups present in index.ndx:")
         with open(index_path, "r") as f:
             for line in f:
@@ -1267,8 +1280,7 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
                     print(f"   {s}")
         exit(1)
 
-    print(f"✅ Verified Step 5 index group exists: {expected_group}\n")
-
+    print(f"✅ Verified Step 5 index groups exist: {expected_group}, {expected_water_group}\n")
 
 
 
@@ -1291,14 +1303,13 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
 
     # ------------------------------------------------------------
     # 6B — Force nvt.mdp to match the actual simulation mode
-    #      This prevents stale tc-grps/comm-grps from older runs
     # ------------------------------------------------------------
     nvt_mdp_path = os.path.join(directory, "nvt.mdp")
     standardize_mdp_groups(nvt_mdp_path, coupling_group_str)
     print(f"✅ Standardized nvt.mdp groups to: {coupling_group_str}")
 
     # ------------------------------------------------------------
-    # 6C — Validate that index.ndx contains the group nvt.mdp expects
+    # 6C — Validate that index.ndx contains the groups nvt.mdp expects
     # ------------------------------------------------------------
     index_path = os.path.join(directory, "index.ndx")
     if not os.path.exists(index_path):
@@ -1308,8 +1319,6 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
     if not index_has_group(index_path, expected_group):
         print(f"❌ FATAL: Expected index group '{expected_group}' not found in index.ndx")
         print("   The NVT MDP file and index file are out of sync.")
-        print("   This usually means a protein-only run inherited stale ligand-style group names,")
-        print("   or the custom merged group was not created correctly.")
         print("\n📋 Groups found in index.ndx:")
         with open(index_path, "r") as f:
             for line in f:
@@ -1318,7 +1327,18 @@ def setup_md(directory, gpu_id, ligand_code, simulation_type, simulation_time_ns
                     print(f"   {s}")
         exit(1)
 
-    print(f"✅ Verified index group exists: {expected_group}")
+    if not index_has_group(index_path, "Water_and_ions"):
+        print("❌ FATAL: Expected index group 'Water_and_ions' not found in index.ndx")
+        print("   The default solvent/ion group is missing from the generated index.")
+        print("\n📋 Groups found in index.ndx:")
+        with open(index_path, "r") as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith("[") and s.endswith("]"):
+                    print(f"   {s}")
+        exit(1)
+
+    print(f"✅ Verified index groups exist: {expected_group}, Water_and_ions")
 
     # ------------------------------------------------------------
     # 6D — Build NVT TPR

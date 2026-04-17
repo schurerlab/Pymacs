@@ -56,6 +56,9 @@ Radius_of_Gyration_Overlay.png
 Figure 8. Global compactness dynamics of the protein–ligand complex measured by radius of gyration.
 Time evolution of the radius of gyration (Rg) for the protein backbone (blue), bound ligand (red), and full protein–ligand complex (green) over the course of the molecular dynamics simulation. Protein Rg reports on global folding stability and breathing motions, while ligand Rg captures intramolecular collapse or extension during binding. The complex Rg reflects overall assembly compactness. Together, these metrics provide a complementary view of conformational stability and structural organization beyond RMSD-based analyses.
 
+Radius_of_Gyration_Protein.png
+Figure 8. Global compactness dynamics of the protein measured by radius of gyration.
+Time evolution of the radius of gyration (Rg) for the protein over the course of the molecular dynamics simulation. Rg reports on the global compactness of the structure and can reveal folding stability, breathing motions, opening/closing behavior, or expansion of flexible domains. Stable Rg suggests maintenance of the overall fold, while systematic increases or broad fluctuations may indicate conformational loosening or sampling of more open states.
 ---
 
 DSSP_Heatmap.png
