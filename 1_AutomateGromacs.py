@@ -550,18 +550,22 @@ import os, json
 
 
 
-
-def generate_atom_index_file(directory, chain_names_arg=None, chain_map_arg=None):
+def generate_atom_index_file(directory, chain_names_arg=None, chain_map_arg=None, source_pdb_path=None):
     """
-    Generates atomIndex.txt with chain names.
+    Generates atomIndex.txt with chain names, while also displaying:
+      - current detected chain IDs
+      - atom index ranges
+      - residue counts
+      - original source chain IDs / residue spans (if source_pdb_path provided)
 
-    Priority order:
+    Priority order for naming:
       1) Explicit CLI chain_map_arg / chain_names_arg
       2) Cached .chainmap.json (if COMPLETE)
       3) Interactive prompt (fallback only)
     """
 
     import os, json
+    from collections import OrderedDict
 
     protein_pdb = os.path.join(directory, "protein.pdb")
     protein_gro = os.path.join(directory, "protein_processed.gro")
@@ -572,27 +576,162 @@ def generate_atom_index_file(directory, chain_names_arg=None, chain_map_arg=None
         print(f"❌ Missing protein.pdb or protein_processed.gro in {directory}")
         return False
 
-    # --------------------------------------------------
-    # Detect chain IDs from PDB
-    # --------------------------------------------------
-    chain_ids = []
-    with open(protein_pdb) as f:
-        for line in f:
-            if line.startswith(("ATOM", "HETATM")):
-                cid = line[21].strip() or "A"
-                if cid not in chain_ids:
-                    chain_ids.append(cid)
+    def parse_pdb_chain_summary(pdb_path):
+        chains = OrderedDict()
+
+        with open(pdb_path) as f:
+            for line in f:
+                if not line.startswith("ATOM"):
+                    continue
+
+                chain_id = line[21].strip() or "A"
+                resname = line[17:20].strip()
+
+                try:
+                    resid = int(line[22:26].strip())
+                except ValueError:
+                    continue
+
+                key = (chain_id, resid)
+                if chain_id not in chains:
+                    chains[chain_id] = {
+                        "chain_id": chain_id,
+                        "resids": [],
+                        "residue_keys": set(),
+                        "first_resname": resname,
+                        "last_resname": resname,
+                    }
+
+                if key not in chains[chain_id]["residue_keys"]:
+                    chains[chain_id]["residue_keys"].add(key)
+                    chains[chain_id]["resids"].append(resid)
+
+                chains[chain_id]["last_resname"] = resname
+
+        out = []
+        for cid, info in chains.items():
+            resids = info["resids"]
+            if resids:
+                out.append({
+                    "chain_id": cid,
+                    "resids": resids,
+                    "residue_count": len(resids),
+                    "resid_start": min(resids),
+                    "resid_end": max(resids),
+                    "first_resname": info["first_resname"],
+                    "last_resname": info["last_resname"],
+                })
+        return out
+
+    def parse_gro_chain_atom_ranges(protein_gro, chain_ids):
+        with open(protein_gro) as f:
+            lines = f.readlines()
+
+        atom_ranges = []
+        atom_counter = 1
+        last_resid = None
+        current_start = 1
+        chain_index = 0
+        gro_chain_start_resid = None
+        current_resid = None
+
+        gro_lines = lines[2:-1]
+
+        for i, line in enumerate(gro_lines):
+            try:
+                resid = int(line[:5].strip())
+            except ValueError:
+                continue
+
+            atom_counter = i + 1
+            current_resid = resid
+
+            if gro_chain_start_resid is None:
+                gro_chain_start_resid = resid
+
+            if last_resid is not None and resid < last_resid:
+                atom_ranges.append((
+                    chain_ids[chain_index],
+                    current_start,
+                    atom_counter,
+                    gro_chain_start_resid,
+                    last_resid
+                ))
+                current_start = atom_counter + 1
+                gro_chain_start_resid = resid
+                chain_index = min(chain_index + 1, len(chain_ids) - 1)
+
+            last_resid = resid
+
+        atom_ranges.append((
+            chain_ids[chain_index],
+            current_start,
+            atom_counter + 1,
+            gro_chain_start_resid,
+            current_resid
+        ))
+
+        return atom_ranges
+
+    # Detect current chains
+    current_chain_summaries = parse_pdb_chain_summary(protein_pdb)
+    chain_ids = [c["chain_id"] for c in current_chain_summaries]
 
     if not chain_ids:
         chain_ids = ["A"]
+        current_chain_summaries = [{
+            "chain_id": "A",
+            "resids": [],
+            "residue_count": 0,
+            "resid_start": None,
+            "resid_end": None,
+            "first_resname": None,
+            "last_resname": None,
+        }]
 
     print(f"🔍 Detected {len(chain_ids)} chain(s): {', '.join(chain_ids)}")
 
+    # Parse GRO + source provenance EARLY
+    atom_ranges = parse_gro_chain_atom_ranges(protein_gro, chain_ids)
+
+    source_chain_summaries = []
+    if source_pdb_path and os.path.exists(source_pdb_path):
+        source_chain_summaries = parse_pdb_chain_summary(source_pdb_path)
+
+    provenance_by_current_chain = {}
+    for i, cid in enumerate(chain_ids):
+        current_info = current_chain_summaries[i] if i < len(current_chain_summaries) else None
+        source_info = source_chain_summaries[i] if i < len(source_chain_summaries) else None
+        provenance_by_current_chain[cid] = {
+            "current": current_info,
+            "source": source_info,
+        }
+
+    # PRINT SUMMARY BEFORE ASKING FOR NAMES
+    print("\n🧬 Chain provenance preview")
+    print("-" * 90)
+    for cid, atom_start, atom_end, gro_resid_start, gro_resid_end in atom_ranges:
+        prov = provenance_by_current_chain.get(cid, {})
+        cur = prov.get("current")
+        src = prov.get("source")
+
+        cur_rescount = cur["residue_count"] if cur else "?"
+        cur_span = f"{cur['resid_start']}-{cur['resid_end']}" if cur and cur["resid_start"] is not None else "?"
+        src_chain = src["chain_id"] if src else "?"
+        src_span = f"{src['resid_start']}-{src['resid_end']}" if src and src["resid_start"] is not None else "?"
+        src_rescount = src["residue_count"] if src else "?"
+
+        print(
+            f"  chain {cid} | "
+            f"GRO atoms {atom_start}-{atom_end} | "
+            f"current residues {cur_span} [{cur_rescount}] | "
+            f"source chain {src_chain} | "
+            f"source residues {src_span} [{src_rescount}]"
+        )
+
     chain_map = {}
 
-    # --------------------------------------------------
     # Priority 1: explicit CLI mapping
-    # --------------------------------------------------
     if chain_map_arg:
         try:
             for pair in chain_map_arg.split(","):
@@ -610,9 +749,7 @@ def generate_atom_index_file(directory, chain_names_arg=None, chain_map_arg=None
                 chain_map[cid] = names[i]
         print(f"🧾 Using chain names from CLI: {chain_map}")
 
-    # --------------------------------------------------
-    # Priority 2: cached mapping (ONLY if complete)
-    # --------------------------------------------------
+    # Priority 2: cached mapping
     elif os.path.exists(cache_file):
         with open(cache_file) as f:
             saved = json.load(f)
@@ -627,11 +764,9 @@ def generate_atom_index_file(directory, chain_names_arg=None, chain_map_arg=None
             print("⚠️ Cached chain map incomplete — ignoring cache.")
             chain_map = {}
 
-    # --------------------------------------------------
-    # Priority 3: interactive prompt (fallback)
-    # --------------------------------------------------
+    # Priority 3: interactive prompt
     if not chain_map:
-        print("💬 Entering interactive chain naming mode.")
+        print("\n💬 Entering interactive chain naming mode.")
 
         for cid in chain_ids:
             while True:
@@ -648,57 +783,64 @@ def generate_atom_index_file(directory, chain_names_arg=None, chain_map_arg=None
         confirm = input("Confirm these names? [Y/n]: ").strip().lower()
         if confirm == "n":
             print("🔁 Restarting chain naming...")
-            return generate_atom_index_file(directory)
+            return generate_atom_index_file(
+                directory,
+                chain_names_arg=chain_names_arg,
+                chain_map_arg=chain_map_arg,
+                source_pdb_path=source_pdb_path
+            )
 
-    # --------------------------------------------------
-    # Save cache
-    # --------------------------------------------------
     with open(cache_file, "w") as f:
         json.dump(chain_map, f, indent=2)
 
     print("💾 Chain map cached.")
 
-    # --------------------------------------------------
-    # Parse atom ranges from GRO
-    # --------------------------------------------------
-    with open(protein_gro) as f:
-        lines = f.readlines()
+    print("\n🧬 Final chain provenance summary")
+    print("-" * 90)
+    for cid, atom_start, atom_end, gro_resid_start, gro_resid_end in atom_ranges:
+        label = chain_map.get(cid, cid)
+        prov = provenance_by_current_chain.get(cid, {})
+        cur = prov.get("current")
+        src = prov.get("source")
 
-    atom_ranges = []
-    atom_counter = 1
-    last_resid = None
-    current_start = 1
-    chain_index = 0
+        cur_rescount = cur["residue_count"] if cur else "?"
+        cur_span = f"{cur['resid_start']}-{cur['resid_end']}" if cur and cur["resid_start"] is not None else "?"
+        src_chain = src["chain_id"] if src else "?"
+        src_span = f"{src['resid_start']}-{src['resid_end']}" if src and src["resid_start"] is not None else "?"
+        src_rescount = src["residue_count"] if src else "?"
 
-    for i, line in enumerate(lines[2:-1]):
-        try:
-            resid = int(line[:5].strip())
-        except ValueError:
-            continue
+        print(
+            f"  current {cid} ({label}) | "
+            f"GRO atoms {atom_start}-{atom_end} | "
+            f"current residues {cur_span} [{cur_rescount}] | "
+            f"source chain {src_chain} | "
+            f"source residues {src_span} [{src_rescount}]"
+        )
 
-        atom_counter = i + 1
-
-        if last_resid is not None and resid < last_resid:
-            atom_ranges.append((chain_ids[chain_index], current_start, atom_counter))
-            current_start = atom_counter + 1
-            chain_index = min(chain_index + 1, len(chain_ids) - 1)
-
-        last_resid = resid
-
-    atom_ranges.append((chain_ids[chain_index], current_start, atom_counter + 1))
-
-    # --------------------------------------------------
-    # Write atomIndex.txt
-    # --------------------------------------------------
     with open(output_file, "w") as f:
-        for cid, start, end in atom_ranges:
+        for cid, atom_start, atom_end, gro_resid_start, gro_resid_end in atom_ranges:
             label = chain_map[cid]
-            f.write(f"{label} {start}-{end}\n")
+            prov = provenance_by_current_chain.get(cid, {})
+            src = prov.get("source")
+
+            if src:
+                f.write(
+                    f"{label} {atom_start}-{atom_end} "
+                    f"# current_chain={cid} current_residues={gro_resid_start}-{gro_resid_end} "
+                    f"source_chain={src['chain_id']} source_residues={src['resid_start']}-{src['resid_end']} "
+                    f"source_rescount={src['residue_count']}\n"
+                )
+            else:
+                f.write(
+                    f"{label} {atom_start}-{atom_end} "
+                    f"# current_chain={cid} current_residues={gro_resid_start}-{gro_resid_end}\n"
+                )
 
     print(f"✅ Generated atomIndex.txt in {directory}")
     return True
 
 
+    
 
 # ======== NEW HELPERS FOR REALTIME CGenFF PREP ========
 
@@ -1601,9 +1743,12 @@ def process_directory(directory, pdb_filename, ligand_code):
         return False
 
     # Step 3: Generate atom index file
-    if not generate_atom_index_file(directory,
-                                chain_names_arg=args.chain_names,
-                                chain_map_arg=args.chain_map):
+    if not generate_atom_index_file(
+                                    directory,
+                                    chain_names_arg=args.chain_names,
+                                    chain_map_arg=args.chain_map,
+                                    source_pdb_path=pdb_path
+                                ):
         print("⚠️ Failed to generate atom index file.")
 
         return False
