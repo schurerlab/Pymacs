@@ -3237,138 +3237,242 @@ else:
 
 
     # ============================================================
-    # STEP D6D — FULL SSE ↔ Ligand Contact Dynamics Analysis
+    # STEP D6D — FULL SSE ↔ Ligand Contact Dynamics Analysis (SAFE)
     # Includes:
     #  - Stacked SSE + Contacts plots
     #  - Pearson & Spearman correlations
     #  - Rolling correlations aligned to trajectory
-    #  - Change-point detection using rupture-Pelt
+    #  - Memory-safe change-point detection
     #  - Segment statistics export
     # ============================================================
 
-    if not done_checkpoint("chk_D6D.txt"):
-        phase("STEP D6D — FULL SSE–Ligand Contact Coupling Analysis")
-        # Load aligned trajectory and ligand info
-        traj, bb, ligand_atoms, lig_resname = get_aligned_traj_and_ligand()
+    if not PARTNER_MODE:
+        print("⏭️ STEP D6D skipped (protein-centric mode).")
 
+    elif not done_checkpoint("chk_D6D.txt"):
+        phase("STEP D6D — FULL SSE–Ligand Contact Coupling Analysis")
+
+        traj, bb, ligand_atoms, lig_resname = get_aligned_traj_and_ligand()
 
         import ruptures as rpt
         from scipy.stats import pearsonr, spearmanr
 
-        # ============================================================
-        # 1) LOAD DSSP (from STEP D6)
-        # ============================================================
-        dssp = md.compute_dssp(traj)
+        # ------------------------------------------------------------
+        # 1) LOAD DSSP FROM STEP D6 OUTPUT IF AVAILABLE
+        #    (avoid recomputing DSSP on large trajectories)
+        # ------------------------------------------------------------
+        dssp_csv = os.path.join(OUTPUT_DIR, "DSSP_raw.csv")
 
         helix_codes = {"H", "G", "I"}
         sheet_codes = {"E", "B"}
         coil_codes  = {"S", "T", "C", " "}
 
+        print("📐 Loading DSSP data for SSE/contact coupling analysis...")
+
+        if os.path.exists(dssp_csv):
+            dssp_df = pd.read_csv(dssp_csv)
+            dssp = dssp_df.astype(str).fillna(" ").values
+            print(f"✅ Reused DSSP from STEP D6: {dssp.shape[0]} frames × {dssp.shape[1]} residues")
+        else:
+            print("⚠️ DSSP_raw.csv not found; recomputing DSSP now...")
+            dssp = md.compute_dssp(traj)
+            pd.DataFrame(dssp).to_csv(dssp_csv, index=False)
+            print(f"✅ DSSP recomputed and saved: {dssp.shape[0]} frames × {dssp.shape[1]} residues")
+
         helix_frac, sheet_frac, coil_frac = [], [], []
 
         for row in dssp:
-            total = len(row)
+            total = len(row) if len(row) > 0 else 1
             helix_frac.append(sum(c in helix_codes for c in row) / total)
             sheet_frac.append(sum(c in sheet_codes for c in row) / total)
-            coil_frac.append(sum(c in coil_codes  for c in row) / total)
+            coil_frac.append(sum(c in coil_codes for c in row) / total)
 
-        time_ns = traj.time / 1000.0
+        helix_frac = np.asarray(helix_frac, dtype=float)
+        sheet_frac = np.asarray(sheet_frac, dtype=float)
+        coil_frac  = np.asarray(coil_frac, dtype=float)
+        time_ns    = np.asarray(traj.time / 1000.0, dtype=float)
 
-        # ============================================================
-        # 2) LOAD CONTACTS FROM STEP E2
-        # ============================================================
-        if "int_df" not in globals():
-            raise RuntimeError("❌ int_df is missing. Run STEP E2 before STEP D6D.")
+        # ------------------------------------------------------------
+        # 2) LOAD CONTACTS FROM STEP E2 / E1 OUTPUT
+        # ------------------------------------------------------------
+        print("🔗 Loading ligand-contact counts over time...")
+
+        if "int_df" in globals() and isinstance(int_df, pd.DataFrame) and not int_df.empty:
+            contact_source_df = int_df.copy()
+        else:
+            fallback_csvs = [
+                os.path.join(OUTPUT_DIR, "All_Interaction_Types_Framewise.csv"),
+                os.path.join(OUTPUT_DIR, "AllContacts_Framewise.csv"),
+                os.path.join(OUTPUT_DIR, "FilteredContacts_Framewise.csv"),
+            ]
+
+            contact_source_df = None
+            for csv_path in fallback_csvs:
+                if os.path.exists(csv_path):
+                    tmp = pd.read_csv(csv_path)
+                    if not tmp.empty and ("Time_ns" in tmp.columns or "Time_ps" in tmp.columns):
+                        contact_source_df = tmp
+                        print(f"✅ Loaded contacts from: {os.path.basename(csv_path)}")
+                        break
+
+            if contact_source_df is None:
+                raise RuntimeError(
+                    "❌ No interaction dataframe available for STEP D6D. "
+                    "Run STEP E1/E2 first so contact counts exist."
+                )
+
+        if "Time_ns" not in contact_source_df.columns:
+            if "Time_ps" in contact_source_df.columns:
+                contact_source_df["Time_ns"] = contact_source_df["Time_ps"] / 1000.0
+            else:
+                raise RuntimeError("❌ Contact dataframe has neither Time_ns nor Time_ps.")
+
+        # Snap contact times to trajectory times to avoid float mismatch issues
+        rounded_contact_time = np.round(contact_source_df["Time_ns"].astype(float).values, 6)
+        rounded_traj_time    = np.round(time_ns, 6)
 
         contact_counts = (
-            int_df.groupby("Time_ns")["Residue"]
-            .count()
-            .reindex(time_ns, fill_value=0)
+            pd.Series(rounded_contact_time)
+            .value_counts()
+            .sort_index()
+            .reindex(rounded_traj_time, fill_value=0)
         )
 
-        # Smooth contacts (helps interpretability)
-        smooth_window = 50
-        contacts_smooth = contact_counts.rolling(smooth_window, center=True).mean()
+        contact_counts.index = time_ns
 
-        # ============================================================
+        # Smooth contacts for interpretability
+        smooth_window = 51
+        if len(contact_counts) < smooth_window:
+            smooth_window = max(5, len(contact_counts) // 5 * 2 + 1)
+
+        contacts_smooth = (
+            contact_counts
+            .rolling(window=smooth_window, center=True, min_periods=1)
+            .mean()
+        )
+
+        # ------------------------------------------------------------
         # 3) CORRELATION ANALYSIS
-        # ============================================================
-        pear_corr, _ = pearsonr(contacts_smooth.fillna(0), sheet_frac)
-        spear_corr, _ = spearmanr(contacts_smooth.fillna(0), sheet_frac)
+        # ------------------------------------------------------------
+        pear_corr, pear_p = pearsonr(contacts_smooth.values, sheet_frac)
+        spear_corr, spear_p = spearmanr(contacts_smooth.values, sheet_frac)
 
         print("\n📈 SSE ↔ Contact Correlations")
-        print(f"   Pearson  (contacts vs sheet): {pear_corr:.3f}")
-        print(f"   Spearman (contacts vs sheet): {spear_corr:.3f}")
+        print(f"   Pearson  (contacts vs sheet): {pear_corr:.3f}  [p={pear_p:.3e}]")
+        print(f"   Spearman (contacts vs sheet): {spear_corr:.3f}  [p={spear_p:.3e}]")
 
-        # ============================================================
-        # 4) FIXED, PROPER ROLLING CORRELATION
-        # ============================================================
+        # ------------------------------------------------------------
+        # 4) ROLLING CORRELATION
+        # ------------------------------------------------------------
         contacts_series = pd.Series(contacts_smooth.values, index=time_ns)
         sheet_series    = pd.Series(sheet_frac, index=time_ns)
 
-        roll_window_frames = 500  # ~1–2 ns depending on dt
+        roll_window_frames = min(500, max(25, len(time_ns) // 100))
+        if roll_window_frames % 2 == 0:
+            roll_window_frames += 1
 
         rolling_corr = (
             contacts_series
-            .rolling(roll_window_frames, center=True)
+            .rolling(roll_window_frames, center=True, min_periods=max(5, roll_window_frames // 5))
             .corr(sheet_series)
         )
 
-        # Align to time axis strictly
         rolling_corr = rolling_corr.reindex(time_ns)
+        rolling_corr = rolling_corr.bfill().ffill()
 
-        # Fix NaN edges
-        rolling_corr = rolling_corr.fillna(method="bfill").fillna(method="ffill")
+        # ------------------------------------------------------------
+        # 5) MEMORY-SAFE CHANGE-POINT DETECTION
+        # ------------------------------------------------------------
+        print("\n🔍 Detecting change-points in ligand contacts (memory-safe mode)...")
 
-        # ============================================================
-        # 5) CHANGE-POINT DETECTION
-        # ============================================================
-        print("\n🔍 Detecting change-points in ligand contacts...")
+        signal = contacts_smooth.fillna(0).astype(np.float32).values
+        n_frames = len(signal)
 
-        algo = rpt.Pelt(model="rbf").fit(contacts_smooth.fillna(0).values)
-        change_points = algo.predict(pen=5)
+        # Downsample aggressively for very long trajectories
+        if n_frames > 40000:
+            ds_factor = 20
+        elif n_frames > 20000:
+            ds_factor = 10
+        elif n_frames > 10000:
+            ds_factor = 5
+        elif n_frames > 5000:
+            ds_factor = 2
+        else:
+            ds_factor = 1
 
-        # Remove the final endpoint (ruptures always adds last index)
-        if change_points and change_points[-1] == len(time_ns):
-            change_points = change_points[:-1]
+        if ds_factor > 1:
+            signal_ds = signal[::ds_factor]
+            time_ds = time_ns[::ds_factor]
+        else:
+            signal_ds = signal
+            time_ds = time_ns
 
+        # reshape for ruptures
+        signal_ds_2d = signal_ds.reshape(-1, 1)
+
+        # choose a sane minimum segment size
+        min_size = max(10, len(signal_ds) // 100)
+
+        try:
+            algo = rpt.Pelt(model="l2", min_size=min_size, jump=1).fit(signal_ds_2d)
+            change_points_ds = algo.predict(pen=3)
+        except Exception as e:
+            print(f"⚠️ Change-point detection failed: {type(e).__name__}: {e}")
+            change_points_ds = [len(signal_ds)]
+
+        # Remove final endpoint if present
+        if change_points_ds and change_points_ds[-1] == len(signal_ds):
+            change_points_ds = change_points_ds[:-1]
+
+        # Map back to original frame indices
+        change_points = sorted(set(int(cp * ds_factor) for cp in change_points_ds if cp * ds_factor < n_frames))
+
+        print(f"   Downsample factor used: {ds_factor}")
         print(f"   Change-points detected at frames: {change_points}")
 
-        # ============================================================
+        # ------------------------------------------------------------
         # 6) CHANGE-POINT SUMMARY CSV
-        # ============================================================
+        # ------------------------------------------------------------
         cp_out = os.path.join(OUTPUT_DIR, f"{lig_resname}_ChangePoint_Summary.csv")
         with open(cp_out, "w") as f:
-            f.write("Segment,StartFrame,EndFrame,MeanContacts,MeanHelix,MeanSheet,MeanCoil\n")
+            f.write("Segment,StartFrame,EndFrame,StartTime_ns,EndTime_ns,MeanContacts,MeanHelix,MeanSheet,MeanCoil\n")
 
+            boundaries = change_points + [n_frames]
             start = 0
-            for i, cp in enumerate(change_points + [len(time_ns)]):
-                seg_contacts = contacts_smooth.iloc[start:cp].mean()
-                seg_helix = np.mean(helix_frac[start:cp])
-                seg_sheet = np.mean(sheet_frac[start:cp])
-                seg_coil  = np.mean(coil_frac[start:cp])
 
-                f.write(f"{i},{start},{cp},{seg_contacts:.3f},{seg_helix:.3f},"
-                        f"{seg_sheet:.3f},{seg_coil:.3f}\n")
+            for i, cp in enumerate(boundaries):
+                if cp <= start:
+                    continue
 
+                seg_contacts = float(np.mean(signal[start:cp]))
+                seg_helix    = float(np.mean(helix_frac[start:cp]))
+                seg_sheet    = float(np.mean(sheet_frac[start:cp]))
+                seg_coil     = float(np.mean(coil_frac[start:cp]))
+
+                f.write(
+                    f"{i},{start},{cp},{time_ns[start]:.6f},{time_ns[cp-1]:.6f},"
+                    f"{seg_contacts:.6f},{seg_helix:.6f},{seg_sheet:.6f},{seg_coil:.6f}\n"
+                )
                 start = cp
 
         print(f"📄 Change-point summary saved: {cp_out}")
 
-        # ============================================================
-        # 7) PLOTTING — SSE TOP, CONTACTS BOTTOM
-        # ============================================================
-
-        fig, (ax1, ax2) = plt.subplots(
-            2, 1, figsize=(16, 12),
-            sharex=True, gridspec_kw={"height_ratios": [2, 1]}
+        # ------------------------------------------------------------
+        # 7) PLOTTING — SSE TOP, CONTACTS MIDDLE, ROLLING CORR BOTTOM
+        # ------------------------------------------------------------
+        fig, axes = plt.subplots(
+            3, 1,
+            figsize=(16, 14),
+            sharex=True,
+            gridspec_kw={"height_ratios": [2.0, 1.2, 1.0]}
         )
 
-        # ------------------ TOP PLOT: SSE FRACTIONS ------------------
-        ax1.plot(time_ns, helix_frac, lw=2, color="blue", label="Helix")
-        ax1.plot(time_ns, sheet_frac, lw=2, color="orange", label="Sheet")
-        ax1.plot(time_ns, coil_frac,  lw=2, color="green", label="Coil")
+        ax1, ax2, ax3 = axes
 
+        # --- TOP: SSE fractions
+        ax1.plot(time_ns, helix_frac, lw=2, color="blue",   label="Helix")
+        ax1.plot(time_ns, sheet_frac, lw=2, color="orange", label="Sheet")
+        ax1.plot(time_ns, coil_frac,  lw=2, color="green",  label="Coil")
         ax1.set_ylabel("Secondary Structure Fraction")
         ax1.set_title(
             f"{compound_name} — SSE vs Ligand Contacts\n"
@@ -3376,46 +3480,52 @@ else:
         )
         ax1.legend(loc="upper right", frameon=False)
 
-        # Change-point markers
         for cp in change_points:
-            ax1.axvspan(time_ns[cp] - 0.2, time_ns[cp] + 0.2,
-                        color="gray", alpha=0.2)
+            ax1.axvline(time_ns[cp], color="black", linestyle="--", alpha=0.35, lw=1)
 
-        # ------------------ BOTTOM PLOT: CONTACTS ------------------
-        ax2.plot(time_ns, contacts_smooth, color="red", lw=1.8,
-                 label="Ligand Contacts (smoothed)")
-        ax2.fill_between(time_ns, contacts_smooth, color="red", alpha=0.2)
-
-        ax2.plot(time_ns, contact_counts, color="black", alpha=0.2,
-                 label="Raw Contacts")
-
+        # --- MIDDLE: raw + smoothed contacts
+        ax2.plot(time_ns, contact_counts.values, lw=0.8, alpha=0.35, color="gray", label="Raw contacts")
+        ax2.plot(time_ns, contacts_smooth.values, lw=2.0, color="crimson", label="Smoothed contacts")
         ax2.set_ylabel("Ligand Contacts / Frame")
-        ax2.set_xlabel("Time (ns)")
         ax2.legend(loc="upper right", frameon=False)
 
-        # Same change-points
         for cp in change_points:
-            ax2.axvspan(time_ns[cp] - 0.2, time_ns[cp] + 0.2,
-                        color="gray", alpha=0.2)
+            ax2.axvline(time_ns[cp], color="black", linestyle="--", alpha=0.35, lw=1)
 
-        # Rolling correlation overlay
-        ax2_2 = ax2.twinx()
-        ax2_2.plot(time_ns, rolling_corr, color="purple", lw=1.5,
-                   label="Rolling Corr")
-        ax2_2.set_ylabel("Rolling Corr (Sheet vs Contacts)", color="purple")
-        ax2_2.tick_params(axis="y", labelcolor="purple")
+        # --- BOTTOM: rolling correlation
+        ax3.plot(time_ns, rolling_corr.values, lw=2.0, color="purple", label="Rolling corr (contacts vs sheet)")
+        ax3.axhline(0, color="black", linestyle=":", lw=1)
+        ax3.set_ylabel("Rolling Corr")
+        ax3.set_xlabel("Time (ns)")
+        ax3.legend(loc="upper right", frameon=False)
 
-        fig.tight_layout()
+        for cp in change_points:
+            ax3.axvline(time_ns[cp], color="black", linestyle="--", alpha=0.35, lw=1)
 
-        out_plot = os.path.join(OUTPUT_DIR, f"{lig_resname}_SSE_vs_Contacts_FULL.png")
-        savefig(out_plot)
+        savefig(os.path.join(OUTPUT_DIR, f"{lig_resname}_SSE_vs_LigandContacts_Dynamics.png"))
+
+        # ------------------------------------------------------------
+        # 8) EXPORT FULL TIME-SERIES TABLE
+        # ------------------------------------------------------------
+        out_df = pd.DataFrame({
+            "Time_ns": time_ns,
+            "Helix_Fraction": helix_frac,
+            "Sheet_Fraction": sheet_frac,
+            "Coil_Fraction": coil_frac,
+            "Raw_Contacts": contact_counts.values,
+            "Smoothed_Contacts": contacts_smooth.values,
+            "Rolling_Corr_Contacts_vs_Sheet": rolling_corr.values
+        })
+
+        out_csv = os.path.join(OUTPUT_DIR, f"{lig_resname}_SSE_Contact_Coupling_Timeseries.csv")
+        out_df.to_csv(out_csv, index=False)
+        print(f"📄 Time-series coupling table saved: {out_csv}")
 
         checkpoint("chk_D6D.txt")
-        print(f"\n✅ STEP D6D complete — full analysis saved to:\n   {out_plot}\n")
+        print("✅ STEP D6D complete.\n")
 
     else:
         print("⏭️ STEP D6D skipped (checkpoint found).")
-
 
 
 
