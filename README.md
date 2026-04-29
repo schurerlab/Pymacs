@@ -9,26 +9,23 @@
 </p>
 
 <p align="center">
-  <a href="REPLACE_WITH_PREPRINT_URL">
-    <img src="https://img.shields.io/badge/Read%20the%20PrePrint-PyMACS-success?style=for-the-badge&logo=readthedocs" alt="Read the PrePrint">
+  <a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6584500">
+    <img src="https://img.shields.io/badge/Read%20the%20Preprint-SSRN-success?style=for-the-badge&logo=readthedocs" alt="Read the PyMACS preprint">
   </a>
-  <a href="mailto:jmschulz@med.miami.edu?subject=PyMACS%20Question%20%2F%20Collaboration">
-    <img src="https://img.shields.io/badge/Contact%20the%20Author-Joseph%20M.%20Schulz-blue?style=for-the-badge&logo=gmail" alt="Contact Joseph M. Schulz">
+  <a href="https://github.com/schurerlab/Pymacs/tree/main/Example">
+    <img src="https://img.shields.io/badge/View%20Example-GitHub%20Folder-orange?style=for-the-badge&logo=github" alt="View the PyMACS example folder">
   </a>
-  <a href="mailto:sschurer@miami.edu?subject=PyMACS%20Correspondence">
-    <img src="https://img.shields.io/badge/Corresponding%20Author-Stephan%20C.%20Sch%C3%BCrer-blueviolet?style=for-the-badge&logo=gmail" alt="Contact corresponding author">
+  <a href="https://github.com/schurerlab/Pymacs/blob/main/Example/MD_ANALYSIS_FIGUREBOOK.pdf">
+    <img src="https://img.shields.io/badge/View%20Example-Figurebook%20PDF-blueviolet?style=for-the-badge&logo=adobeacrobatreader" alt="View the example MD analysis figurebook PDF">
   </a>
 </p>
 
 <p align="center">
-  <a href="#-quick-start-templates">
-    <img src="https://img.shields.io/badge/Get%20Started-Quick%20Start-orange?style=for-the-badge&logo=gnubash" alt="Get Started">
+  <a href="mailto:jmschulz@med.miami.edu?subject=PyMACS%20Question%20%2F%20Collaboration">
+    <img src="https://img.shields.io/badge/Contact%20the%20Author-Joseph%20M.%20Schulz-blue?style=for-the-badge&logo=gmail" alt="Contact Joseph M. Schulz">
   </a>
-  <a href="#-reproduce-the-included-example-figurebook-demo">
-    <img src="https://img.shields.io/badge/Run%20the%20Demo-Example%20Figurebook-9cf?style=for-the-badge&logo=python" alt="Run the Demo">
-  </a>
-  <a href="#-citation">
-    <img src="https://img.shields.io/badge/Cite-PyMACS-lightgrey?style=for-the-badge&logo=googlescholar" alt="Cite PyMACS">
+  <a href="mailto:sschurer@miami.edu?subject=PyMACS%20Correspondence">
+    <img src="https://img.shields.io/badge/Corresponding%20Author-Stephan%20C.%20Sch%C3%BCrer-lightgrey?style=for-the-badge&logo=gmail" alt="Contact Stephan C. Schürer">
   </a>
 </p>
 
@@ -45,48 +42,39 @@
 
 \*Corresponding author: **sschurer@miami.edu**
 
-**Repository name:** `PyMACs`  
-**Status:** Active development — manuscript and software in development  
+**Repository:** `schurerlab/Pymacs`  
+**Status:** Active development; preprint available on SSRN.
 
 ---
 
-## 🤝 Need Help with PyMACS?
+## 📚 Preprint
 
-If you are using PyMACS for **GROMACS molecular dynamics**, **protein–ligand simulations**, **CGenFF ligand preparation**, **trajectory analysis**, **figurebook generation**, or **PROTAC / multi-component MD workflows**, you are welcome to reach out.
+**PyMACS: A Python-Based Automation Suite for GROMACS Molecular Dynamics Setup, Simulation, and Analysis**  
+Joseph M. Schulz, Robert C. Reynolds, Stephan C. Schürer
 
 <p align="center">
-  <a href="mailto:jmschulz@med.miami.edu?subject=PyMACS%20Help%20%2F%20Collaboration">
-    <img src="https://img.shields.io/badge/Need%20Help%3F-Contact%20Joseph%20M.%20Schulz-blue?style=for-the-badge" alt="Contact for PyMACS help">
+  <a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6584500">
+    <img src="https://img.shields.io/badge/Read%20the%20Preprint-SSRN-success?style=for-the-badge&logo=readthedocs" alt="Read the PyMACS preprint">
+  </a>
+</p>
+
+---
+
+## 🤝 Contact and Collaboration
+
+For questions about PyMACS, molecular dynamics workflow support, CGenFF setup, GROMACS automation, figurebook generation, or related collaborations, contact the authors below.
+
+<p align="center">
+  <a href="mailto:jmschulz@med.miami.edu?subject=PyMACS%20Question%20%2F%20Collaboration">
+    <img src="https://img.shields.io/badge/Questions%20%2F%20Collaboration-Joseph%20M.%20Schulz-blue?style=for-the-badge" alt="Contact Joseph M. Schulz">
   </a>
   <a href="mailto:jmschulz@med.miami.edu?subject=PyMACS%20Workflow%20Support">
     <img src="https://img.shields.io/badge/Workflow%20Support-GROMACS%20%2B%20CGenFF-orange?style=for-the-badge" alt="PyMACS workflow support">
   </a>
-  <a href="mailto:jmschulz@med.miami.edu?subject=PyMACS%20Collaboration">
-    <img src="https://img.shields.io/badge/Collaborations-MD%20Automation%20%2F%20PROTACs-success?style=for-the-badge" alt="PyMACS collaborations">
+  <a href="mailto:sschurer@miami.edu?subject=PyMACS%20Correspondence">
+    <img src="https://img.shields.io/badge/Correspondence-Sch%C3%BCrer%20Lab-lightgrey?style=for-the-badge" alt="Schürer Lab correspondence">
   </a>
 </p>
-
----
-
-## 📚 Manuscript / Related Resources
-
-**Title:** *PyMACS: A Python-Based Automation Suite for GROMACS Molecular Dynamics Setup, Simulation, and Analysis*  
-**Authors:** Joseph M. Schulz¹, Robert C. Reynolds², Stephan C. Schürer\*¹˒³˒⁴  
-**Status:** Manuscript in development / preprint link to be added.
-
-<p align="center">
-  <a href="REPLACE_WITH_PREPRINT_URL">
-    <img src="https://img.shields.io/badge/Read%20the%20PrePrint-Coming%20Soon-success?style=for-the-badge" alt="Read the PrePrint">
-  </a>
-  <a href="mailto:jmschulz@med.miami.edu?subject=PyMACS%20Preprint%20Question">
-    <img src="https://img.shields.io/badge/Questions-Email%20the%20Author-blueviolet?style=for-the-badge" alt="Email the author">
-  </a>
-  <a href="mailto:sschurer@miami.edu?subject=PyMACS%20Manuscript%20Correspondence">
-    <img src="https://img.shields.io/badge/Manuscript%20Correspondence-Sch%C3%BCrer%20Lab-lightgrey?style=for-the-badge" alt="Contact corresponding author">
-  </a>
-</p>
-
-> **Note:** Replace `REPLACE_WITH_PREPRINT_URL` with the final bioRxiv, ChemRxiv, journal, DOI, or institutional preprint link when available.
 
 ---
 
@@ -94,12 +82,12 @@ If you are using PyMACS for **GROMACS molecular dynamics**, **protein–ligand s
 
 **PyMACS** is a Python-based toolkit for automating **molecular dynamics setup**, **simulation execution**, **trajectory analysis**, and **publication-ready figure/report generation** using **GROMACS** and **CHARMM36**.
 
-It is designed to support:
+PyMACS supports:
 
 - **Protein-only systems**
 - **Protein–ligand systems**
 - **Protein–protein systems**
-- **PROTAC / multi-component workflows** through optional utilities
+- **PROTAC / multi-component workflows**
 
 Core goals:
 
@@ -111,7 +99,19 @@ Core goals:
 
 ---
 
-## 🧭 Table of Contents
+## 🧭 Repository Navigation
+
+<p align="center">
+  <a href="#-quick-start-templates">
+    <img src="https://img.shields.io/badge/Get%20Started-Quick%20Start-orange?style=for-the-badge&logo=gnubash" alt="Get started with PyMACS">
+  </a>
+  <a href="#-reproduce-the-included-example-figurebook-demo">
+    <img src="https://img.shields.io/badge/Run%20the%20Demo-Example%20System-9cf?style=for-the-badge&logo=python" alt="Run the PyMACS demo">
+  </a>
+  <a href="#-citation">
+    <img src="https://img.shields.io/badge/Cite-PyMACS-lightgrey?style=for-the-badge&logo=googlescholar" alt="Cite PyMACS">
+  </a>
+</p>
 
 - [What’s in this repo](#-whats-in-this-repo-current-directory-layout)
 - [System requirements](#%EF%B8%8F-system-requirements)
@@ -131,8 +131,6 @@ Core goals:
 ---
 
 ## 📦 What’s in this repo — current directory layout
-
-This reflects the current repository structure.
 
 ```text
 PyMACs/
@@ -164,14 +162,14 @@ PyMACs/
 └── README.md
 ```
 
-> Your clone may include additional helper scripts or files as the project evolves.
+The repository may include additional helper scripts or files as the project evolves.
 
 ---
 
 ## ⚙️ System requirements
 
 - **OS:** Linux or WSL2 recommended  
-  - macOS may be fine for analysis-only workflows, but GROMACS installation and GPU support vary.
+  - macOS can be used for analysis-only workflows, but GROMACS installation and GPU support vary.
 - **GROMACS:** 2022+ recommended  
   - Non-MPI binary expected by default.
   - Must be callable as `gmx`.
@@ -219,9 +217,9 @@ PyMACS is designed to be practical for real laboratory inputs. For some systems,
 Therefore:
 
 - The repository root should contain **both** force field folders so fallback logic is available.
-- For per-system run folders, you have two options:
-  - **Auto-fallback enabled, recommended for new users:** copy **both** force field folders into the run directory.
-  - **Manual / controlled mode, advanced:** copy only the force field you intend to use and disable or avoid fallback behavior in your workflow.
+- For per-system run folders, there are two typical options:
+  - **Auto-fallback enabled:** copy **both** force field folders into the run directory.
+  - **Manual / controlled setup:** copy only the force field intended for the run and avoid fallback behavior in that workflow.
 
 ---
 
@@ -245,7 +243,7 @@ This conversion produces GROMACS-compatible ligand include files such as:
 - `.itp`
 - `.prm`
 
-### ✅ CGenFF version requirement — validated
+### ✅ CGenFF version requirement
 
 PyMACS workflows are currently validated against **CGenFF 4.6**.
 
@@ -253,18 +251,18 @@ Use **CGenFF 4.6** for generating `.str` and `.cgenff.mol2` inputs.
 
 Newer CGenFF releases may produce outputs that are not currently compatible with the conversion and include conventions used here.
 
-> If you hit unexpected `grompp`, include, or atomtype issues while using a newer CGenFF release, the first troubleshooting step is to regenerate ligand files using **CGenFF 4.6**.
+If unexpected `grompp`, include, or atomtype issues occur while using a newer CGenFF release, regenerate ligand files using **CGenFF 4.6**.
 
 ### ⚠️ Common failure mode
 
-Pre-converted “GROMACS bundles” from servers or third-party converters can differ in:
+Pre-converted GROMACS ligand bundles from servers or third-party converters can differ in:
 
 - include ordering
 - atomtype declarations
 - duplication or overlap with force-field parameters
 - assumptions about LJ-PME vs classic CHARMM36
 
-PyMACS includes multiple modes and workarounds to accommodate common lab realities.
+PyMACS includes multiple modes and workarounds to accommodate common laboratory input formats.
 
 ---
 
@@ -272,7 +270,7 @@ PyMACS includes multiple modes and workarounds to accommodate common lab realiti
 
 ### Mode 1 — Import pre-converted GROMACS ligand files
 
-Use this when you already have GROMACS-formatted ligand files, such as:
+Use this when GROMACS-formatted ligand files already exist, such as:
 
 - `.itp`
 - `.prm`
@@ -282,24 +280,24 @@ This is an **advanced / bring-your-own-parameters** mode.
 
 Rules to avoid breakage:
 
-1. Make sure your run directory has a force-field context consistent with your ligand parameters.
+1. Make sure the run directory has a force-field context consistent with the ligand parameters.
 2. Keep include duplication under control:
    - exactly one ligand `.itp` include
    - any required ligand parameter include files, if used
    - one `[ molecules ]` entry for the ligand
 
-> This mode is powerful, but it assumes you understand the parameter topology ecosystem you are bringing in.
+This mode is powerful, but it assumes the user understands the parameter topology ecosystem being supplied.
 
 ---
 
 ### Mode 2 — CGenFF server outputs only — recommended
 
-Use this when you can obtain from the CGenFF server or local CGenFF:
+Use this when the CGenFF server or local CGenFF provides:
 
 - `<LIG>.cgenff.mol2`
 - `<LIG>.str`
 
-Place them in your run directory before running PyMACS. PyMACS will convert locally using the included converter.
+Place them in the run directory before running PyMACS. PyMACS will convert locally using the included converter.
 
 Naming must match the PDB residue name exactly, typically a 3-letter residue name.
 
@@ -339,7 +337,7 @@ export PATH="$SILCSBIO_HOME/programs:$SILCSBIO_HOME:$PATH"
 
 PyMACS is designed for iterative workflows. Re-running steps **overwrites outputs by default**, including regenerated `.tpr` files, refreshed plots, and updated PDF figurebooks.
 
-If you want to preserve a run state, copy or rename the run folder before re-running.
+To preserve a run state, copy or rename the run folder before re-running.
 
 Recommended structure:
 
@@ -353,13 +351,13 @@ RUNS/SystemA_run03/
 
 ## 🚀 Quick start templates
 
-Below are two short templates you can copy and paste.
+Below are two short templates for common use cases.
 
 ---
 
 ### Template A — Run a new system end-to-end
 
-> Recommended: do not run in the repository root. Create a per-system run folder.
+Recommended: do not run in the repository root. Create a per-system run folder.
 
 ```bash
 mkdir -p RUNS/MySystem_01
@@ -415,7 +413,7 @@ python 4PDF4MD.py
 
 ### Template B — Analysis-only
 
-Use this when MD is already complete and you only want plots and PDF reporting.
+Use this when MD is already complete and only plots and PDF reporting are needed.
 
 ```bash
 conda activate mdanalysis
@@ -470,14 +468,13 @@ Typical actions:
 
 PyMACS supports **checkpoint-safe resumption** of production molecular dynamics runs using standard GROMACS restart mechanics. This is intended for runs interrupted by walltime limits, node failures, or manual termination.
 
-> **Key idea:** the production length is stored in `md_0_1.tpr`.  
-> On restart, GROMACS uses the existing `.tpr` and `.cpt`, and does **not** read `md.mdp`.
+**Key idea:** the production length is stored in `md_0_1.tpr`. On restart, GROMACS uses the existing `.tpr` and `.cpt`, and does **not** read `md.mdp`.
 
 ---
 
 ### ✅ Required files
 
-To resume production, your run folder must contain:
+To resume production, the run folder must contain:
 
 - `md_0_1.tpr` — production input created by `gmx grompp`
 - `md_0_1.cpt` — production checkpoint written during `gmx mdrun`
@@ -492,7 +489,7 @@ Optional but common:
 
 ### 🚀 Resume production only — GPU
 
-Use this when you want to skip EM / NVT / NPT and continue production only.
+Use this to skip EM / NVT / NPT and continue production only.
 
 ```bash
 conda activate mdanalysis
@@ -514,13 +511,7 @@ Conceptually: **no**. A restart uses `md_0_1.tpr`, so the simulation continues w
 
 Practically, in current headless CLI behavior: **yes**. The `--ns` argument avoids an interactive prompt.
 
-To ensure PyMACS does not alter your `.tpr`, set `--ns` to the original runtime, for example `250`, or any value that is less than or equal to the existing `.tpr` length.
-
-If you do not want PyMACS to attempt any TPR extension logic, you can:
-
-- keep `--ns` equal to the original run length, recommended
-- remove the extension call in `maybe_resume_production_only()`, developer option
-- add a future flag such as `--no_extend`, recommended enhancement
+To ensure PyMACS does not alter the existing `.tpr`, set `--ns` to the original runtime, for example `250`, or any value that is less than or equal to the existing `.tpr` length.
 
 ---
 
@@ -543,7 +534,7 @@ python 2_AutomateGromacs.py \
 
 ### 🧯 Force a clean restart
 
-Use this if you do not want PyMACS to resume, even if a checkpoint exists.
+Use this when the run should not resume, even if a checkpoint exists.
 
 ```bash
 conda activate mdanalysis
@@ -628,7 +619,7 @@ Compiles analysis outputs into a PDF report ordered through:
 
 ## 🧭 Guided walkthrough template — interactive
 
-This section mirrors the practical “what you actually do” experience, including typical prompts.
+This section mirrors the practical run experience, including typical prompts.
 
 ---
 
@@ -711,7 +702,7 @@ Typical flow:
 - production MD
 - duration selected interactively or through CLI arguments
 
-> Need to resume a crashed or paused production run? See [Restarting / Resuming Production MD](#-restarting--resuming-production-md-checkpoint-safe-mode).
+For interrupted production runs, use the checkpoint-safe restart commands above.
 
 ---
 
@@ -751,18 +742,29 @@ Figure ordering is controlled by:
 
 ## 🧪 Reproduce the included Example figurebook — demo
 
-The repository includes:
+The repository includes a complete example system and a reference figurebook.
+
+<p align="center">
+  <a href="https://github.com/schurerlab/Pymacs/tree/main/Example">
+    <img src="https://img.shields.io/badge/Browse%20Example-GitHub%20Folder-orange?style=for-the-badge&logo=github" alt="Browse the example folder">
+  </a>
+  <a href="https://github.com/schurerlab/Pymacs/blob/main/Example/MD_ANALYSIS_FIGUREBOOK.pdf">
+    <img src="https://img.shields.io/badge/Open%20Figurebook-PDF-blueviolet?style=for-the-badge&logo=adobeacrobatreader" alt="Open the example figurebook PDF">
+  </a>
+</p>
+
+Included files:
 
 - `Example/CPD32_9G94.pdb` — demo input
 - `Example/A1D/A1D.str` — demo ligand stream file
 - `Example/A1D/A1D.cgenff.mol2` — demo CGenFF MOL2 file
-- `Example/MD_ANALYSIS_FIGUREBOOK.pdf` — expected figurebook style / output
+- `Example/MD_ANALYSIS_FIGUREBOOK.pdf` — reference figurebook output
 
 ### Goal
 
-Run the pipeline using the included example inputs and generate a figurebook PDF in your run directory that matches the structure and content of the included example.
+Run the pipeline using the included example inputs and generate a figurebook PDF in the run directory that matches the structure and content of the included reference output.
 
-> Exact byte-for-byte identity can vary across operating systems and matplotlib versions, but the figure order and content types should match when using the same settings.
+Exact byte-for-byte identity can vary across operating systems and matplotlib versions, but the figure order and content types should match when using the same settings.
 
 ---
 
@@ -783,8 +785,8 @@ cp ../../cgenff_charmm2gmx_py3_nx2.py .
 cp ../../em.mdp .
 cp ../../ions.mdp .
 cp ../../nvt.mdp .
-cp ../../npt.mdp .
 cp ../../md.mdp .
+cp ../../npt.mdp .
 
 # Copy BOTH force fields, required for auto-fallback demo
 cp -r ../../charmm36.ff .
@@ -811,17 +813,17 @@ python 4PDF4MD.py
 
 ### What to compare
 
-Compare your generated figurebook against:
+Compare the generated figurebook against:
 
 ```text
 ../../Example/MD_ANALYSIS_FIGUREBOOK.pdf
 ```
 
-If your PDF is missing sections:
+If the PDF is missing sections:
 
 - confirm the analysis stage completed successfully
-- confirm `4_MDfigs.txt` points to plots that exist in your run folder
-- confirm you are using CGenFF **4.6**-generated ligand files or the included example files
+- confirm `4_MDfigs.txt` points to plots that exist in the run folder
+- confirm CGenFF **4.6**-generated ligand files are being used, or use the included example ligand files
 
 ---
 
@@ -854,9 +856,9 @@ If a run fails early:
 
 - keep both force fields present and allow fallback logic to run
 - validate that ligand input files are present and named correctly
-- ensure you are using **CGenFF 4.6** if generating new `.str` / `.mol2` files
+- ensure **CGenFF 4.6** is used when generating new `.str` / `.mol2` files
 - inspect `topol.top` for duplicated ligand includes
-- confirm `gmx` is available in your environment
+- confirm `gmx` is available in the active environment
 
 ---
 
@@ -865,9 +867,9 @@ If a run fails early:
 - Use one system per folder.
 - Keep run folders clean.
 - Let the pipeline overwrite outputs inside an active run folder; this is intended behavior.
-- Clone or copy the folder if you need an archive snapshot before re-running.
-- For CGenFF ligands, prefer classic `charmm36.ff` unless LJ-PME has been validated end-to-end for your system.
-- Keep both force-field folders present for new-user auto-fallback workflows.
+- Clone or copy the folder if an archive snapshot is needed before re-running.
+- For CGenFF ligands, prefer classic `charmm36.ff` unless LJ-PME has been validated end-to-end for the system.
+- Keep both force-field folders present for auto-fallback workflows.
 - Archive the following for reproducibility:
   - input PDB
   - ligand `.str` / `.cgenff.mol2`
@@ -889,7 +891,7 @@ If a run fails early:
 
 ## 📌 Provenance note
 
-This repository contains practical workflow utilities developed for GROMACS-based molecular dynamics simulations, with a focus on reproducible setup, ligand-aware parameterization, and downstream analysis reporting.
+This repository contains workflow utilities developed for GROMACS-based molecular dynamics simulations, with a focus on reproducible setup, ligand-aware parameterization, and downstream analysis reporting.
 
 PyMACS is intended for:
 
@@ -899,21 +901,19 @@ PyMACS is intended for:
 - protein–protein and multi-component simulations
 - PROTAC / induced-proximity modeling workflows where MD analysis is needed downstream
 
-It is **not** a replacement for understanding the underlying molecular dynamics assumptions, force-field compatibility, or ligand-parameter quality control required for rigorous simulation studies.
+PyMACS does not replace careful evaluation of molecular dynamics assumptions, force-field compatibility, ligand parameter quality, or system-specific simulation design.
 
 ---
 
 ## 🧬 Citation
 
-If you use PyMACS in academic work, please cite the manuscript and/or the software release:
+If you use PyMACS in academic work, please cite the preprint and/or the software release:
 
-> Schulz, J. M., Reynolds, R. C., & Schürer, S. C. **PyMACS: A Python-Based Automation Suite for GROMACS Molecular Dynamics Setup, Simulation, and Analysis.** Manuscript in preparation.
-
-When the preprint is available, update this section with the final DOI or preprint link.
+> Schulz, J. M., Reynolds, R. C., & Schürer, S. C. **PyMACS: A Python-Based Automation Suite for GROMACS Molecular Dynamics Setup, Simulation, and Analysis.** SSRN preprint.
 
 <p align="center">
-  <a href="REPLACE_WITH_PREPRINT_URL">
-    <img src="https://img.shields.io/badge/Cite%20the%20PrePrint-Update%20Link%20When%20Available-success?style=for-the-badge" alt="Cite the PrePrint">
+  <a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6584500">
+    <img src="https://img.shields.io/badge/Cite%20the%20Preprint-SSRN-success?style=for-the-badge" alt="Cite the PyMACS preprint">
   </a>
 </p>
 
@@ -928,7 +928,7 @@ For questions, workflow support, bug reports, or collaboration inquiries:
     <img src="https://img.shields.io/badge/Joseph%20M.%20Schulz-jmschulz%40med.miami.edu-blue?style=for-the-badge&logo=gmail" alt="Email Joseph M. Schulz">
   </a>
   <a href="mailto:sschurer@miami.edu?subject=PyMACS%20Correspondence">
-    <img src="https://img.shields.io/badge/Stephan%20C.%20Sch%C3%BCrer-sschurer%40miami.edu-blueviolet?style=for-the-badge&logo=gmail" alt="Email Stephan C. Schürer">
+    <img src="https://img.shields.io/badge/Stephan%20C.%20Sch%C3%BCrer-sschurer%40miami.edu-lightgrey?style=for-the-badge&logo=gmail" alt="Email Stephan C. Schürer">
   </a>
 </p>
 
@@ -939,11 +939,11 @@ For questions, workflow support, bug reports, or collaboration inquiries:
 
 ## 🙌 Practical takeaway
 
-Use PyMACS when you want a practical, scriptable, reproducible workflow for:
+Use PyMACS to build reproducible, scriptable GROMACS workflows for:
 
-- setting up GROMACS simulations,
-- integrating CHARMM36 / CGenFF ligand parameters,
-- running MD,
-- resuming interrupted production runs,
-- analyzing trajectories, and
-- generating clean PDF figurebooks for downstream interpretation and reporting.
+- molecular dynamics setup,
+- CHARMM36 / CGenFF ligand integration,
+- MD execution,
+- interrupted-run recovery,
+- trajectory analysis, and
+- PDF figurebook generation for downstream interpretation and reporting.
