@@ -31,6 +31,8 @@
 
 ---
 
+<a id="authors"></a>
+
 ## 👥 Authors
 
 **Joseph M. Schulz¹, Robert C. Reynolds², Stephan C. Schürer\*¹˒³˒⁴**
@@ -47,6 +49,8 @@
 
 ---
 
+<a id="preprint"></a>
+
 ## 📚 Preprint
 
 **PyMACS: A Python-Based Automation Suite for GROMACS Molecular Dynamics Setup, Simulation, and Analysis**  
@@ -59,6 +63,8 @@ Joseph M. Schulz, Robert C. Reynolds, Stephan C. Schürer
 </p>
 
 ---
+
+<a id="contact-and-collaboration"></a>
 
 ## 🤝 Contact and Collaboration
 
@@ -77,6 +83,8 @@ For questions about PyMACS, molecular dynamics workflow support, CGenFF setup, G
 </p>
 
 ---
+
+<a id="overview"></a>
 
 ## 🚀 Overview
 
@@ -99,36 +107,49 @@ Core goals:
 
 ---
 
+<a id="repository-navigation"></a>
+
 ## 🧭 Repository Navigation
 
 <p align="center">
-  <a href="#-quick-start-templates">
+  <a href="#quick-start-templates">
     <img src="https://img.shields.io/badge/Get%20Started-Quick%20Start-orange?style=for-the-badge&logo=gnubash" alt="Get started with PyMACS">
   </a>
-  <a href="#-reproduce-the-included-example-figurebook-demo">
+  <a href="#guided-tutorial">
+    <img src="https://img.shields.io/badge/Tutorial-Guided%20Walkthrough-blue?style=for-the-badge&logo=readthedocs" alt="Open the guided PyMACS tutorial">
+  </a>
+  <a href="#example-figurebook-demo">
     <img src="https://img.shields.io/badge/Run%20the%20Demo-Example%20System-9cf?style=for-the-badge&logo=python" alt="Run the PyMACS demo">
   </a>
-  <a href="#-citation">
+  <a href="#citation">
     <img src="https://img.shields.io/badge/Cite-PyMACS-lightgrey?style=for-the-badge&logo=googlescholar" alt="Cite PyMACS">
   </a>
 </p>
 
-- [What’s in this repo](#-whats-in-this-repo-current-directory-layout)
-- [System requirements](#%EF%B8%8F-system-requirements)
-- [Environment setup](#-environment-setup)
-- [Force fields included](#-force-fields-included-and-why-both-are-shipped)
-- [Ligand parameterization and CGenFF support](#-ligand-parameterization-and-cgenff-support)
-- [The 3 CGenFF modes](#-the-3-cgenff-modes-pymacs-supported)
-- [Quick start templates](#-quick-start-templates)
-- [Pipeline stages](#-pipeline-stages-scripts)
-- [Restarting / resuming production MD](#-restarting--resuming-production-md-checkpoint-safe-mode)
-- [Guided walkthrough](#-guided-walkthrough-template-interactive)
-- [Example figurebook demo](#-reproduce-the-included-example-figurebook-demo)
-- [Troubleshooting](#-troubleshooting-notes)
-- [Citation](#-citation)
-- [Contact](#-contact)
+- [What’s in this repo](#repository-layout)
+- [System requirements](#system-requirements)
+- [Environment setup](#environment-setup)
+- [Force fields included](#force-fields)
+- [Ligand parameterization and CGenFF support](#ligand-parameterization)
+- [The 3 CGenFF modes](#cgenff-modes)
+- [Quick start templates](#quick-start-templates)
+- [Pipeline stages](#pipeline-stages)
+- [Restarting / resuming production MD](#restart-production-md)
+- [Guided tutorial / walkthrough](#guided-tutorial)
+- [Example figurebook demo](#example-figurebook-demo)
+- [tmux quick tips](#tmux-quick-tips)
+- [Troubleshooting](#troubleshooting)
+- [Best practices](#best-practices)
+- [Repository description](#repository-description)
+- [Provenance note](#provenance-note)
+- [Citation](#citation)
+- [Contact](#contact)
+
+These links use explicit README anchors so the buttons and table of contents remain stable on GitHub.
 
 ---
+
+<a id="repository-layout"></a>
 
 ## 📦 What’s in this repo — current directory layout
 
@@ -166,6 +187,8 @@ The repository may include additional helper scripts or files as the project evo
 
 ---
 
+<a id="system-requirements"></a>
+
 ## ⚙️ System requirements
 
 - **OS:** Linux or WSL2 recommended  
@@ -180,6 +203,8 @@ The repository may include additional helper scripts or files as the project evo
 - **GPU:** optional but recommended for production MD.
 
 ---
+
+<a id="environment-setup"></a>
 
 ## 🧪 Environment setup
 
@@ -197,6 +222,8 @@ bash recreate_envs.sh
 ```
 
 ---
+
+<a id="force-fields"></a>
 
 ## 🧬 Force fields included and why BOTH are shipped
 
@@ -222,6 +249,8 @@ Therefore:
   - **Manual / controlled setup:** copy only the force field intended for the run and avoid fallback behavior in that workflow.
 
 ---
+
+<a id="ligand-parameterization"></a>
 
 ## 🧪 Ligand parameterization and CGenFF support
 
@@ -265,6 +294,8 @@ Pre-converted GROMACS ligand bundles from servers or third-party converters can 
 PyMACS includes multiple modes and workarounds to accommodate common laboratory input formats.
 
 ---
+
+<a id="cgenff-modes"></a>
 
 ## ✅ The 3 CGenFF modes — PyMACS-supported
 
@@ -333,6 +364,8 @@ export PATH="$SILCSBIO_HOME/programs:$SILCSBIO_HOME:$PATH"
 
 ---
 
+<a id="output-behavior"></a>
+
 ## ✅ Output behavior: overwrite-by-default
 
 PyMACS is designed for iterative workflows. Re-running steps **overwrites outputs by default**, including regenerated `.tpr` files, refreshed plots, and updated PDF figurebooks.
@@ -348,6 +381,8 @@ RUNS/SystemA_run03/
 ```
 
 ---
+
+<a id="quick-start-templates"></a>
 
 ## 🚀 Quick start templates
 
@@ -423,6 +458,8 @@ python 4PDF4MD.py
 
 ---
 
+<a id="pipeline-stages"></a>
+
 ## 🧩 Pipeline stages — scripts
 
 ### 🧱 Step 1 — Setup
@@ -463,6 +500,8 @@ Typical actions:
 - thread tuning through environment variables and script prompts
 
 ---
+
+<a id="restart-production-md"></a>
 
 ## 🔁 Restarting / Resuming Production MD — checkpoint-safe mode
 
@@ -617,6 +656,8 @@ Compiles analysis outputs into a PDF report ordered through:
 
 ---
 
+<a id="guided-tutorial"></a>
+
 ## 🧭 Guided walkthrough template — interactive
 
 This section mirrors the practical run experience, including typical prompts.
@@ -740,6 +781,8 @@ Figure ordering is controlled by:
 
 ---
 
+<a id="example-figurebook-demo"></a>
+
 ## 🧪 Reproduce the included Example figurebook — demo
 
 The repository includes a complete example system and a reference figurebook.
@@ -827,6 +870,8 @@ If the PDF is missing sections:
 
 ---
 
+<a id="tmux-quick-tips"></a>
+
 ## 🧠 tmux quick tips
 
 `tmux` is recommended for long local, remote, or server-side runs.
@@ -840,6 +885,8 @@ If the PDF is missing sections:
 | Kill a session | `tmux kill-session -t MDRUN` |
 
 ---
+
+<a id="troubleshooting"></a>
 
 ## 🧯 Troubleshooting notes
 
@@ -862,6 +909,8 @@ If a run fails early:
 
 ---
 
+<a id="best-practices"></a>
+
 ## 📌 Best practices
 
 - Use one system per folder.
@@ -883,11 +932,15 @@ If a run fails early:
 
 ---
 
+<a id="repository-description"></a>
+
 ## 🧾 Repository description
 
 > PyMACS is a Python-based automation suite for reproducible GROMACS molecular dynamics setup, CGenFF ligand integration, simulation execution, trajectory analysis, and PDF figurebook generation.
 
 ---
+
+<a id="provenance-note"></a>
 
 ## 📌 Provenance note
 
@@ -905,6 +958,8 @@ PyMACS does not replace careful evaluation of molecular dynamics assumptions, fo
 
 ---
 
+<a id="citation"></a>
+
 ## 🧬 Citation
 
 If you use PyMACS in academic work, please cite the preprint and/or the software release:
@@ -918,6 +973,8 @@ If you use PyMACS in academic work, please cite the preprint and/or the software
 </p>
 
 ---
+
+<a id="contact"></a>
 
 ## 📬 Contact
 
@@ -936,6 +993,8 @@ For questions, workflow support, bug reports, or collaboration inquiries:
 - **Stephan C. Schürer** — Corresponding author, University of Miami  
 
 ---
+
+<a id="practical-takeaway"></a>
 
 ## 🙌 Practical takeaway
 
