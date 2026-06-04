@@ -1,0 +1,18 @@
+# Python packages for the non-Conda `.venvs/cgenff` fallback environment.
+# Conda/Mamba remains the most reproducible option for PyMACS.
+#
+# GROMACS is not installed by pip. Install it separately and expose it as
+# `gmx`, `gmx_mpi`, `gmx-mpi`, or by setting `PYMACS_GMX_BIN`.
+#
+# GPU/CUDA-oriented Conda packages from `environment_cgenff.yml` are omitted
+# here because a plain `venv` should stay portable across Linux/macOS/WSL.
+#
+# `pdbfixer` and `openmm` are intentionally not pinned in this fallback file.
+# At the time this script was added, the available PyPI `pdbfixer` release
+# required `openmm>=8.2`, while the matching `openmm` wheel was not available
+# on the validation platform. Use the Conda/Mamba path if you need that branch.
+
+biopython==1.85
+networkx==3.2.1
+numpy==1.26.4
+rdkit==2024.9.6

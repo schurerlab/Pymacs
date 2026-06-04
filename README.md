@@ -893,6 +893,47 @@ Or use the helper script:
 bash recreate_envs.sh
 ```
 
+### Non-Conda fallback setup with Python venv
+
+Conda or Mamba remains the recommended fully reproducible path for PyMACS. If you have Python available but do not have Conda/Mamba on the system, PyMACS also ships a fallback `venv`-based setup script:
+
+```bash
+bash recreate_envs_venv.sh
+```
+
+To rebuild both virtual environments from scratch:
+
+```bash
+bash recreate_envs_venv.sh --recreate
+```
+
+This fallback creates:
+
+- `.venvs/cgenff` for setup and ligand parameterization support
+- `.venvs/mdanalysis` for simulation, analysis, and reporting support
+
+Important notes:
+
+- Conda/Mamba is still the preferred path when you want the closest match to `environment_cgenff.yml` and `environment_mdanalysis.yml`.
+- The `venv` path installs Python packages with `pip`, so some compiled/scientific dependencies may still require system compilers, headers, or shared libraries on Linux/macOS/WSL.
+- The fallback `cgenff` `venv` intentionally avoids pinning the PDBFixer/OpenMM pair because PyPI wheel availability can lag behind Conda compatibility on some platforms. Use the Conda/Mamba environments if you rely on that preparation branch.
+- GROMACS is not installed by `pip` and must be installed separately. PyMACS expects it to be available as `gmx`, `gmx_mpi`, `gmx-mpi`, or through `PYMACS_GMX_BIN`.
+- Native Windows support is not included in this helper. Use Linux, macOS, or WSL for the documented `venv` flow.
+- If `pip` dependency resolution or wheel builds fail on your machine, use the Conda/Mamba setup instead.
+
+Activation and example usage:
+
+```bash
+source .venvs/cgenff/bin/activate
+python 1_AutomateGromacs.py
+
+deactivate
+source .venvs/mdanalysis/bin/activate
+python 2_AutomateGromacs.py
+python 3A_AutomateGromacs.py
+python 4PDF4MD.py
+```
+
 ---
 
 <a id="force-fields"></a>

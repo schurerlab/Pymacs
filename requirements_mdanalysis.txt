@@ -1,0 +1,38 @@
+# Python packages for the non-Conda `.venvs/mdanalysis` fallback environment.
+# Conda/Mamba remains the recommended path when you need the closest parity
+# with the repository's Conda YAML files.
+#
+# GROMACS is not installed by pip. Install it separately and expose it as
+# `gmx`, `gmx_mpi`, `gmx-mpi`, or by setting `PYMACS_GMX_BIN`.
+#
+# Conda-only or system-level packages such as CUDA/CuPy stacks, Qt GUI stacks,
+# and DSSP executables are intentionally omitted from this fallback file.
+#
+# `rlpycairo` / `pycairo` are also omitted here because they commonly require
+# native Cairo development libraries and `pkg-config` on macOS/Linux. PyMACS'
+# PDF workflow in this repository uses `reportlab` + `svglib` directly.
+
+biopython==1.85
+cssselect2==0.8.0
+dockq==2.1.3
+lxml==6.1.1
+MDAnalysis==2.7.0
+matplotlib==3.9.4
+mdtraj==1.10.3
+networkx==3.2.1
+numpy==1.26.4
+pandas==2.3.3
+pillow==11.3.0
+plotly==6.3.0
+prolif==2.0.3
+pyedr==0.8.0
+rdkit==2024.9.6
+reportlab==4.4.6
+ruptures==1.1.10
+scikit-learn==1.6.1
+scipy==1.13.1
+seaborn==0.13.2
+statsmodels==0.14.4
+tinycss2==1.4.0
+tqdm==4.67.1
+webencodings==0.5.1
