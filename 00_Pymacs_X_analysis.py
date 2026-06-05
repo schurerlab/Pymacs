@@ -3714,7 +3714,7 @@ def pymacs_brand_links(github_url: str, preprint_url: str, contact_email: str) -
     subject = "PyMACS comparative MD dashboard"
     body = "Hello PyMACS authors,%0D%0A%0D%0AI have a question about the PyMACS comparative MD dashboard.%0D%0A"
     mailto = f"mailto:{contact_email}?subject={subject.replace(' ', '%20')}&body={body}"
-    return f'<div class="brandLinks"><a class="buttonLink primary" href="{html_escape(github_url)}" target="_blank" rel="noopener">GitHub: PyMACS</a><a class="buttonLink green" href="{html_escape(preprint_url)}" target="_blank" rel="noopener">Preprint / Paper</a><a class="buttonLink magenta" href="{html_escape(mailto)}">Contact Authors</a></div>'
+    return f'<div class="brandLinks"><a class="buttonLink primary" href="{html_escape(github_url)}" target="_blank" rel="noopener">GitHub: PyMACS</a><a class="buttonLink green" href="{html_escape(preprint_url)}" target="_blank" rel="noopener">Published Paper</a><a class="buttonLink magenta" href="{html_escape(mailto)}">Contact Authors</a></div>'
 
 
 
@@ -4093,7 +4093,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-framewise-mb", type=float, default=500.0, help="Safety limit for optional framewise parsing.")
     p.add_argument("--open", action="store_true", help="Open index.html in browser after building.")
     p.add_argument("--github-url", default="https://github.com/schurerlab/Pymacs", help="PyMACS GitHub URL.")
-    p.add_argument("--preprint-url", default="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6584500", help="PyMACS preprint/paper URL.")
+    p.add_argument("--preprint-url", default="https://www.sciencedirect.com/science/article/pii/S0223523426004836", help="PyMACS published paper URL.")
     p.add_argument("--contact-email", default="jmschulz@med.miami.edu", help="Contact email for dashboard mailto link.")
     p.add_argument("--logo-url", default=PYMACS_LOGO_URL, help="URL for PyMACS logo to bundle as images/favicon.png when no local logo is found.")
     p.add_argument("--logo-file", default=None, help="Optional local logo PNG to copy into each dashboard export as images/favicon.png.")

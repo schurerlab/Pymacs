@@ -9,8 +9,8 @@
 </p>
 
 <p align="center">
-  <a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6584500">
-    <img src="https://img.shields.io/badge/Read%20the%20Preprint-SSRN-success?style=for-the-badge&logo=readthedocs" alt="Read the PyMACS preprint">
+  <a href="https://www.sciencedirect.com/science/article/pii/S0223523426004836">
+    <img src="https://img.shields.io/badge/Read%20the%20Paper-ScienceDirect-success?style=for-the-badge&logo=readthedocs" alt="Read the PyMACS paper">
   </a>
   <a href="https://github.com/schurerlab/Pymacs/tree/main/Example_Choices">
     <img src="https://img.shields.io/badge/View%20Example-GitHub%20Folder-orange?style=for-the-badge&logo=github" alt="View the PyMACS example folder">
@@ -45,20 +45,23 @@
 \*Corresponding author: **sschurer@miami.edu**
 
 **Repository:** `schurerlab/Pymacs`  
-**Status:** Active development; preprint available on SSRN.
+**Status:** Published in *European Journal of Medicinal Chemistry*; active development continues.
 
 ---
 
-<a id="preprint"></a>
+<a id="paper"></a>
 
-## 📚 Preprint
+## 📚 Published Paper
 
 **PyMACS: A Python-Based Automation Suite for GROMACS Molecular Dynamics Setup, Simulation, and Analysis**  
 Joseph M. Schulz, Robert C. Reynolds, Stephan C. Schürer
 
+*European Journal of Medicinal Chemistry* (2026), **316**, 119038  
+DOI: `10.1016/j.ejmech.2026.119038`
+
 <p align="center">
-  <a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6584500">
-    <img src="https://img.shields.io/badge/Read%20the%20Preprint-SSRN-success?style=for-the-badge&logo=readthedocs" alt="Read the PyMACS preprint">
+  <a href="https://www.sciencedirect.com/science/article/pii/S0223523426004836">
+    <img src="https://img.shields.io/badge/Read%20the%20Paper-ScienceDirect-success?style=for-the-badge&logo=readthedocs" alt="Read the PyMACS paper">
   </a>
 </p>
 
@@ -2084,13 +2087,13 @@ PyMACS does not replace careful evaluation of molecular dynamics assumptions, fo
 
 ## 🧬 Citation
 
-If you use PyMACS in academic work, please cite the preprint and/or the software release:
+If you use PyMACS in academic work, please cite the published paper and/or the software release:
 
-> Schulz, J. M., Reynolds, R. C., & Schürer, S. C. **PyMACS: A Python-Based Automation Suite for GROMACS Molecular Dynamics Setup, Simulation, and Analysis.** SSRN preprint.
+> Schulz, J. M., Reynolds, R. C., & Schürer, S. C. **PyMACS: A Python-Based Automation Suite for GROMACS Molecular Dynamics Setup, Simulation, and Analysis.** *European Journal of Medicinal Chemistry* (2026), 316, 119038. https://doi.org/10.1016/j.ejmech.2026.119038
 
 <p align="center">
-  <a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6584500">
-    <img src="https://img.shields.io/badge/Cite%20the%20Preprint-SSRN-success?style=for-the-badge" alt="Cite the PyMACS preprint">
+  <a href="https://www.sciencedirect.com/science/article/pii/S0223523426004836">
+    <img src="https://img.shields.io/badge/Cite%20the%20Paper-ScienceDirect-success?style=for-the-badge" alt="Cite the PyMACS paper">
   </a>
 </p>
 
