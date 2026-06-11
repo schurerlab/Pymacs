@@ -3617,7 +3617,7 @@ def graph_card(fig: Optional[go.Figure], key: str, panel: str) -> str:
             f'{fig_to_div(fig)}</div>')
 
 
-def dashboard_hero_html(title: str, subtitle: str, logo_rel: str, github_url: str, preprint_url: str, contact_email: str, extra_meta: Optional[List[Tuple[str, str]]] = None, home_link: bool = False, data_dir_rel: Optional[str] = None) -> str:
+def dashboard_hero_html(title: str, subtitle: str, logo_rel: str, github_url: str, publication_url: str, contact_email: str, extra_meta: Optional[List[Tuple[str, str]]] = None, home_link: bool = False, data_dir_rel: Optional[str] = None) -> str:
     meta = extra_meta or []
     meta_html = "".join(f'<span class="metaPill"><b>{html_escape(k)}:</b> {html_escape(v)}</span>' for k, v in meta if v is not None)
     nav = '<div class="sectionNav">'
@@ -3630,7 +3630,7 @@ def dashboard_hero_html(title: str, subtitle: str, logo_rel: str, github_url: st
     return ('<div class="card hero"><div class="heroGrid"><div>'
             '<div class="eyebrow">PyMACS dashboard</div>'
             f'<h1>{html_escape(title)}</h1><p class="sub">{html_escape(subtitle)}</p>'
-            f'<div class="heroMeta">{meta_html}</div>{pymacs_brand_links(github_url, preprint_url, contact_email)}{nav}'
+            f'<div class="heroMeta">{meta_html}</div>{pymacs_brand_links(github_url, publication_url, contact_email)}{nav}'
             '</div>'
             f'<div class="brandOrb"><img src="{html_escape(logo_rel)}" alt="PyMACS logo"/><div class="orbText">PyMACS</div></div>'
             '</div></div>')
@@ -3710,11 +3710,11 @@ def page_shell(title: str, body: str, bundle_root: Path, current_file: Path, tab
 </script>'''
     return f'<!DOCTYPE html><html lang="en" data-theme="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>{html_escape(title)}</title><link rel="icon" type="image/png" href="{html_escape(favicon_rel)}"/><link rel="apple-touch-icon" href="{html_escape(favicon_rel)}"/><meta name="theme-color" content="#05060a"/><meta name="description" content="PyMACS comparative molecular dynamics dashboard export."/>{early_theme_script}<script src="{html_escape(plotly_rel)}"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.0.4/3Dmol-min.js"></script><style>{GLOBAL_CSS}</style></head><body>{theme_toggle}<div id="top" class="page">{body}</div><script>{GLOBAL_JS}</script><script>wireTables({ids_js});</script></body></html>'
 
-def pymacs_brand_links(github_url: str, preprint_url: str, contact_email: str) -> str:
+def pymacs_brand_links(github_url: str, publication_url: str, contact_email: str) -> str:
     subject = "PyMACS comparative MD dashboard"
     body = "Hello PyMACS authors,%0D%0A%0D%0AI have a question about the PyMACS comparative MD dashboard.%0D%0A"
     mailto = f"mailto:{contact_email}?subject={subject.replace(' ', '%20')}&body={body}"
-    return f'<div class="brandLinks"><a class="buttonLink primary" href="{html_escape(github_url)}" target="_blank" rel="noopener">GitHub: PyMACS</a><a class="buttonLink green" href="{html_escape(preprint_url)}" target="_blank" rel="noopener">Published Paper</a><a class="buttonLink magenta" href="{html_escape(mailto)}">Contact Authors</a></div>'
+    return f'<div class="brandLinks"><a class="buttonLink primary" href="{html_escape(github_url)}" target="_blank" rel="noopener">GitHub: PyMACS</a><a class="buttonLink green" href="{html_escape(publication_url)}" target="_blank" rel="noopener">Published Article</a><a class="buttonLink magenta" href="{html_escape(mailto)}">Contact Authors</a></div>'
 
 
 
@@ -3854,7 +3854,7 @@ def save_cross_species_exports(data_dir: Path, comps: Dict[str, Any]) -> None:
     save_df(comps.get("contact_hover_long"), data_dir / "contact_hover_long.csv")
 
 
-def build_family_page(out_html: Path, bundle_root: Path, family: str, runs: List[RunData], apo: Optional[RunData], comps: Dict[str, Any], github_url: str, preprint_url: str, contact_email: str, use_framewise: bool) -> None:
+def build_family_page(out_html: Path, bundle_root: Path, family: str, runs: List[RunData], apo: Optional[RunData], comps: Dict[str, Any], github_url: str, publication_url: str, contact_email: str, use_framewise: bool) -> None:
     figs = comps["figs"]
     fig_groups = [
         ("protein", "Protein-state figures", ["protein_rmsd", "rg", "protein_rmsf", "apo_delta", "binding_delta"]),
@@ -3890,7 +3890,7 @@ def build_family_page(out_html: Path, bundle_root: Path, family: str, runs: List
         "PyMACS molecular-dynamics dashboard summarizing global protein behavior, local flexibility, ligand pose stability, contact persistence, and ligand-to-ligand differences.",
         logo_rel,
         github_url,
-        preprint_url,
+        publication_url,
         contact_email,
         extra_meta=[("Runs", str(len(runs))), ("Ligand-bound", str(n_lig)), ("Apo/reference", apo.name if apo else "None"), ("Mode", "Framewise" if use_framewise else "Fast")],
         home_link=True,
@@ -3926,7 +3926,7 @@ def cross_species_rmsf_warning_html(rmsf_long: pd.DataFrame) -> str:
     return ""
 
 
-def build_cross_species_page(out_html: Path, bundle_root: Path, runs: List[RunData], comps: Dict[str, Any], github_url: str, preprint_url: str, contact_email: str, use_framewise: bool) -> None:
+def build_cross_species_page(out_html: Path, bundle_root: Path, runs: List[RunData], comps: Dict[str, Any], github_url: str, publication_url: str, contact_email: str, use_framewise: bool) -> None:
     figs = comps["figs"]
     fig_groups = [
         ("protein", "Protein-state figures", ["protein_rmsd", "rg", "protein_rmsf_residue", "cross_apo_delta_bars"]),
@@ -3955,7 +3955,7 @@ def build_cross_species_page(out_html: Path, bundle_root: Path, runs: List[RunDa
         "PyMACS molecular-dynamics dashboard overlaying all detected runs across species/families using shared run-level summaries and already-loaded analysis tables.",
         logo_rel,
         github_url,
-        preprint_url,
+        publication_url,
         contact_email,
         extra_meta=[("Scope", scope_note), ("Species", str(len(species))), ("Runs", str(len(runs))), ("Mode", "Framewise" if use_framewise else "Fast")],
         home_link=True,
@@ -3980,7 +3980,7 @@ def build_cross_species_page(out_html: Path, bundle_root: Path, runs: List[RunDa
     out_html.write_text(page_shell("PyMACS Dashboard — ALL species comparison", body, bundle_root, out_html, table_ids), encoding="utf-8")
 
 
-def build_index_page(out_html: Path, bundle_root: Path, payloads: Dict[str, Tuple[List[RunData], Optional[RunData], Dict[str, Any]]], github_url: str, preprint_url: str, contact_email: str, cross_species_payload: Optional[Tuple[List[RunData], Dict[str, Any]]] = None) -> None:
+def build_index_page(out_html: Path, bundle_root: Path, payloads: Dict[str, Tuple[List[RunData], Optional[RunData], Dict[str, Any]]], github_url: str, publication_url: str, contact_email: str, cross_species_payload: Optional[Tuple[List[RunData], Dict[str, Any]]] = None) -> None:
     rows, cards = [], []
     if cross_species_payload is not None:
         cross_runs, cross_comps = cross_species_payload
@@ -4001,7 +4001,7 @@ def build_index_page(out_html: Path, bundle_root: Path, payloads: Dict[str, Tupl
         "Interactive molecular-dynamics summaries generated from existing PyMACS analysis outputs. Select a family or species below to inspect apo-vs-ligand dynamics, ligand behavior, contact fingerprints, and exported data tables.",
         logo_rel,
         github_url,
-        preprint_url,
+        publication_url,
         contact_email,
         extra_meta=[("Families", str(len(payloads))), ("Output", "HTML + CSV"), ("Assets", "bundled locally")],
         home_link=False,
@@ -4093,7 +4093,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-framewise-mb", type=float, default=500.0, help="Safety limit for optional framewise parsing.")
     p.add_argument("--open", action="store_true", help="Open index.html in browser after building.")
     p.add_argument("--github-url", default="https://github.com/schurerlab/Pymacs", help="PyMACS GitHub URL.")
-    p.add_argument("--preprint-url", default="https://www.sciencedirect.com/science/article/pii/S0223523426004836", help="PyMACS published paper URL.")
+    p.add_argument("--publication-url", default="https://www.sciencedirect.com/science/article/pii/S0223523426004836?via%3Dihub", help="PyMACS published article URL.")
     p.add_argument("--contact-email", default="jmschulz@med.miami.edu", help="Contact email for dashboard mailto link.")
     p.add_argument("--logo-url", default=PYMACS_LOGO_URL, help="URL for PyMACS logo to bundle as images/favicon.png when no local logo is found.")
     p.add_argument("--logo-file", default=None, help="Optional local logo PNG to copy into each dashboard export as images/favicon.png.")
@@ -4135,7 +4135,7 @@ def main() -> None:
         data_dir = outdir / "data" / family; save_family_exports(data_dir, comps)
         save_df(build_contact_hover_export(fam_runs), data_dir / "contact_hover_summary.csv")
         family_html = outdir / f"family_{slugify(family)}.html"
-        build_family_page(family_html, outdir, family, fam_runs, apo, comps, github_url=args.github_url, preprint_url=args.preprint_url, contact_email=args.contact_email, use_framewise=args.use_framewise)
+        build_family_page(family_html, outdir, family, fam_runs, apo, comps, github_url=args.github_url, publication_url=args.publication_url, contact_email=args.contact_email, use_framewise=args.use_framewise)
         info(f"Wrote {family_html}")
         payloads[family] = (fam_runs, apo, comps)
     cross_species_payload: Optional[Tuple[List[RunData], Dict[str, Any]]] = None
@@ -4146,11 +4146,11 @@ def main() -> None:
         cross_data_dir = outdir / "data" / "cross_species_ALL"
         save_cross_species_exports(cross_data_dir, cross_comps)
         cross_html = outdir / "cross_species_ALL.html"
-        build_cross_species_page(cross_html, outdir, cross_runs, cross_comps, github_url=args.github_url, preprint_url=args.preprint_url, contact_email=args.contact_email, use_framewise=args.use_framewise)
+        build_cross_species_page(cross_html, outdir, cross_runs, cross_comps, github_url=args.github_url, publication_url=args.publication_url, contact_email=args.contact_email, use_framewise=args.use_framewise)
         info(f"Wrote {cross_html}")
         cross_species_payload = (cross_runs, cross_comps)
     index_html = outdir / "index.html"
-    build_index_page(index_html, outdir, payloads, github_url=args.github_url, preprint_url=args.preprint_url, contact_email=args.contact_email, cross_species_payload=cross_species_payload)
+    build_index_page(index_html, outdir, payloads, github_url=args.github_url, publication_url=args.publication_url, contact_email=args.contact_email, cross_species_payload=cross_species_payload)
     phase("Done")
     print(f"✅ Dashboard index: {index_html}", flush=True)
     print(f"✅ CSV exports:      {outdir / 'data'}", flush=True)
