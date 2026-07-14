@@ -15,6 +15,7 @@ cd "$SCRIPT_DIR"
 
 CGENFF_YML="environment_cgenff.yml"
 MDA_YML="environment_mdanalysis.yml"
+VENV_SCRIPT="recreate_envs_venv.sh"
 
 require_file() {
   local file="$1"
@@ -29,6 +30,48 @@ have_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+have_c_compiler() {
+  have_cmd gcc || have_cmd cc
+}
+
+have_cpp_compiler() {
+  have_cmd g++ || have_cmd c++
+}
+
+detect_package_manager() {
+  local manager
+  for manager in apt yum brew; do
+    if have_cmd "$manager"; then
+      printf '%s\n' "$manager"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+install_system_packages() {
+  local manager="$1"
+  shift
+
+  case "$manager" in
+    apt)
+      sudo apt update
+      sudo apt install -y "$@"
+      ;;
+    yum)
+      sudo yum install -y "$@"
+      ;;
+    brew)
+      brew install "$@"
+      ;;
+    *)
+      echo "❌ Unsupported package manager: $manager"
+      exit 1
+      ;;
+  esac
+}
+
 env_exists() {
   local env_name="$1"
   conda env list | awk '{print $1}' | grep -Fxq "$env_name"
@@ -39,11 +82,32 @@ get_env_name() {
   awk '/^name:/ {print $2; exit}' "$yml_file"
 }
 
+detect_platform() {
+  uname -s
+}
+
+run_venv_fallback() {
+  require_file "$VENV_SCRIPT" "venv recreation script"
+  echo "ℹ️  Falling back to Python venv environments via $VENV_SCRIPT"
+  bash "$SCRIPT_DIR/$VENV_SCRIPT"
+  exit 0
+}
+
 # -------------------------------
 # Validate files
 # -------------------------------
 require_file "$CGENFF_YML" "cgenff environment file"
 require_file "$MDA_YML" "mdanalysis environment file"
+
+PLATFORM="$(detect_platform)"
+
+if [[ "$PLATFORM" == "Darwin" && "${PYMACS_FORCE_CONDA:-0}" != "1" ]]; then
+  echo "⚠️  Detected macOS."
+  echo "   The Conda environment YAMLs in this repo are pinned to Linux-only packages"
+  echo "   and cannot be solved reliably on macOS/Apple Silicon."
+  echo "   Set PYMACS_FORCE_CONDA=1 to try Conda anyway, or use the supported fallback below."
+  run_venv_fallback
+fi
 
 # -------------------------------
 # Validate conda
@@ -62,26 +126,42 @@ eval "$(conda shell.bash hook)"
 # -------------------------------
 echo "🔍 Checking required system tools..."
 
+if ! PACKAGE_MANAGER="$(detect_package_manager)"; then
+  echo "❌ No supported package manager found."
+  echo "Install the required build tools manually, then re-run this script."
+  exit 1
+fi
+
+echo "📦 Using package manager: $PACKAGE_MANAGER"
+
 NEED_BUILD_TOOLS=0
-for tool in gcc g++ make; do
-  if ! have_cmd "$tool"; then
-    NEED_BUILD_TOOLS=1
-    break
-  fi
-done
+if ! have_c_compiler || ! have_cpp_compiler || ! have_cmd make; then
+  NEED_BUILD_TOOLS=1
+fi
 
 if [[ "$NEED_BUILD_TOOLS" -eq 1 ]]; then
-  echo "➡️  Missing compiler toolchain. Installing build-essential..."
-  sudo apt update
-  sudo apt install -y build-essential
+  case "$PACKAGE_MANAGER" in
+    apt)
+      echo "➡️  Missing compiler toolchain. Installing build-essential..."
+      install_system_packages "$PACKAGE_MANAGER" build-essential
+      ;;
+    yum)
+      echo "➡️  Missing compiler toolchain. Installing gcc gcc-c++ make..."
+      install_system_packages "$PACKAGE_MANAGER" gcc gcc-c++ make
+      ;;
+    brew)
+      echo "➡️  Missing compiler toolchain. Installing gcc and make..."
+      install_system_packages "$PACKAGE_MANAGER" gcc make
+      ;;
+  esac
 else
-  echo "✅ build-essential already available"
+  echo "✅ compiler toolchain already available"
 fi
 
 # Optional but often useful for scientific Python builds
 if ! have_cmd pkg-config; then
   echo "➡️  Installing pkg-config..."
-  sudo apt install -y pkg-config
+  install_system_packages "$PACKAGE_MANAGER" pkg-config
 else
   echo "✅ pkg-config already available"
 fi

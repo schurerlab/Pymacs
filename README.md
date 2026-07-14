@@ -919,10 +919,29 @@ Important notes:
 
 - Conda/Mamba is still the preferred path when you want the closest match to `environment_cgenff.yml` and `environment_mdanalysis.yml`.
 - The `venv` path installs Python packages with `pip`, so some compiled/scientific dependencies may still require system compilers, headers, or shared libraries on Linux/macOS/WSL.
-- The fallback `cgenff` `venv` intentionally avoids pinning the PDBFixer/OpenMM pair because PyPI wheel availability can lag behind Conda compatibility on some platforms. Use the Conda/Mamba environments if you rely on that preparation branch.
+- On macOS, `recreate_envs.sh` automatically falls back to the `venv` setup because the shipped Conda YAML files are Linux-oriented and are not expected to solve reliably on Apple Silicon.
+- The fallback `cgenff` `venv` intentionally avoids pinning the PDBFixer/OpenMM pair because PyPI wheel availability can lag behind Conda compatibility on some platforms. This means the fallback environment is not feature-equivalent to the Linux/Conda environment for automatic missing-residue repair.
+- If your input PDB contains incomplete standard residues and PDBFixer/OpenMM is unavailable, PyMACS now stops early with a residue-level message instead of continuing to a later `pdb2gmx` crash. In that case, use a Linux/Conda environment or repair the structure before running PyMACS.
 - GROMACS is not installed by `pip` and must be installed separately. PyMACS expects it to be available as `gmx`, `gmx_mpi`, `gmx-mpi`, or through `PYMACS_GMX_BIN`.
 - Native Windows support is not included in this helper. Use Linux, macOS, or WSL for the documented `venv` flow.
 - If `pip` dependency resolution or wheel builds fail on your machine, use the Conda/Mamba setup instead.
+
+### Pre-repairing PDB files before PyMACS
+
+If you want PyMACS to run without relying on its internal missing-atom repair path, prepare the protein structure first with a dedicated structure-repair tool and then feed the repaired PDB into `1_AutomateGromacs.py`.
+
+Common options include:
+
+- `PDBFixer` for scripted repair of missing heavy atoms, hydrogens, and common structure issues
+- Schrödinger Protein Preparation Wizard for GUI-driven protein cleanup and protonation workflows
+- ChimeraX for interactive residue inspection, atom completion, and export of repaired coordinates
+- Coot for manual residue rebuilding when a specific sidechain or loop is broken
+- MODELLER for cases where missing residues or larger segments must be rebuilt, not just patched atom-by-atom
+
+Practical guidance:
+
+- If PyMACS reports incomplete residues such as `HIS329 missing atom(s): CE1, NE2`, repair those residues upstream and rerun PyMACS with the repaired file.
+- For automated production use, Linux/Conda remains the recommended path when you want PyMACS to handle the PDBFixer/OpenMM repair stage internally.
 
 Activation and example usage:
 

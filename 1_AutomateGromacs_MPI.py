@@ -644,6 +644,98 @@ def validate_input_pdb(pdb_path, ligand_code=None, strict=False, allow_covalent=
     }
 
 
+STANDARD_PROTEIN_HEAVY_ATOMS = {
+    "ALA": {"N", "CA", "C", "O", "CB"},
+    "ARG": {"N", "CA", "C", "O", "CB", "CG", "CD", "NE", "CZ", "NH1", "NH2"},
+    "ASN": {"N", "CA", "C", "O", "CB", "CG", "OD1", "ND2"},
+    "ASP": {"N", "CA", "C", "O", "CB", "CG", "OD1", "OD2"},
+    "CYS": {"N", "CA", "C", "O", "CB", "SG"},
+    "GLN": {"N", "CA", "C", "O", "CB", "CG", "CD", "OE1", "NE2"},
+    "GLU": {"N", "CA", "C", "O", "CB", "CG", "CD", "OE1", "OE2"},
+    "GLY": {"N", "CA", "C", "O"},
+    "HIS": {"N", "CA", "C", "O", "CB", "CG", "ND1", "CD2", "CE1", "NE2"},
+    "HID": {"N", "CA", "C", "O", "CB", "CG", "ND1", "CD2", "CE1", "NE2"},
+    "HIE": {"N", "CA", "C", "O", "CB", "CG", "ND1", "CD2", "CE1", "NE2"},
+    "HIP": {"N", "CA", "C", "O", "CB", "CG", "ND1", "CD2", "CE1", "NE2"},
+    "HSD": {"N", "CA", "C", "O", "CB", "CG", "ND1", "CD2", "CE1", "NE2"},
+    "HSE": {"N", "CA", "C", "O", "CB", "CG", "ND1", "CD2", "CE1", "NE2"},
+    "HSP": {"N", "CA", "C", "O", "CB", "CG", "ND1", "CD2", "CE1", "NE2"},
+    "ILE": {"N", "CA", "C", "O", "CB", "CG1", "CG2", "CD1"},
+    "LEU": {"N", "CA", "C", "O", "CB", "CG", "CD1", "CD2"},
+    "LYS": {"N", "CA", "C", "O", "CB", "CG", "CD", "CE", "NZ"},
+    "MET": {"N", "CA", "C", "O", "CB", "CG", "SD", "CE"},
+    "PHE": {"N", "CA", "C", "O", "CB", "CG", "CD1", "CD2", "CE1", "CE2", "CZ"},
+    "PRO": {"N", "CA", "C", "O", "CB", "CG", "CD"},
+    "SER": {"N", "CA", "C", "O", "CB", "OG"},
+    "THR": {"N", "CA", "C", "O", "CB", "OG1", "CG2"},
+    "TRP": {"N", "CA", "C", "O", "CB", "CG", "CD1", "CD2", "NE1", "CE2", "CE3", "CZ2", "CZ3", "CH2"},
+    "TYR": {"N", "CA", "C", "O", "CB", "CG", "CD1", "CD2", "CE1", "CE2", "CZ", "OH"},
+    "VAL": {"N", "CA", "C", "O", "CB", "CG1", "CG2"},
+}
+
+
+def detect_incomplete_protein_residues(pdb_path):
+    residues = OrderedDict()
+    with open(pdb_path, "r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if not line.startswith("ATOM  "):
+                continue
+            atom_name = line[12:16].strip().upper()
+            altloc = line[16].strip()
+            resname = line[17:20].strip().upper()
+            chain_id = line[21].strip() or "?"
+            resid = line[22:26].strip()
+            insertion_code = line[26].strip()
+            if altloc not in {"", "A", "1"}:
+                continue
+            if resname not in STANDARD_PROTEIN_HEAVY_ATOMS:
+                continue
+            if atom_name.startswith("H"):
+                continue
+            key = (chain_id, resid, insertion_code, resname)
+            entry = residues.setdefault(
+                key,
+                {
+                    "chain_id": chain_id,
+                    "resid": resid,
+                    "insertion_code": insertion_code,
+                    "resname": resname,
+                    "atoms": set(),
+                },
+            )
+            entry["atoms"].add(atom_name)
+
+    incomplete = []
+    for entry in residues.values():
+        expected = STANDARD_PROTEIN_HEAVY_ATOMS[entry["resname"]]
+        missing_atoms = sorted(expected - entry["atoms"])
+        if missing_atoms:
+            incomplete.append(
+                {
+                    "chain_id": entry["chain_id"],
+                    "resid": entry["resid"],
+                    "insertion_code": entry["insertion_code"],
+                    "resname": entry["resname"],
+                    "missing_atoms": missing_atoms,
+                }
+            )
+    return incomplete
+
+
+def format_incomplete_residue_summary(incomplete_residues, limit=8):
+    preview = incomplete_residues[:limit]
+    lines = []
+    for entry in preview:
+        resid_label = f"{entry['resid']}{entry['insertion_code']}" if entry["insertion_code"] else entry["resid"]
+        lines.append(
+            f"chain {entry['chain_id']} {entry['resname']}{resid_label} missing atom(s): {', '.join(entry['missing_atoms'])}"
+        )
+    remaining = len(incomplete_residues) - len(preview)
+    if remaining > 0:
+        lines.append(f"... plus {remaining} more incomplete residue(s)")
+    return "\n".join(f"  - {line}" for line in lines)
+
+
 
 def ensure_cgenff_prm_included(topol_path, prm_file, itp_file):
     with open(topol_path) as f:
@@ -823,18 +915,25 @@ def fix_missing_atoms(input_pdb, output_pdb, ph=7.4):
     try:
         from pdbfixer import PDBFixer
         from openmm.app import PDBFile
-
+    except ModuleNotFoundError as exc:
+        print(
+            "⚠️ Skipping PDBFixer repair because the optional dependency stack is unavailable "
+            f"({exc}). Continuing with the sanitized protein structure."
+        )
+        return "unavailable"
+    try:
         fixer = PDBFixer(filename=input_pdb)
         fixer.findMissingResidues()
         fixer.findMissingAtoms()
         fixer.addMissingAtoms()
         fixer.addMissingHydrogens(pH=ph)
-        PDBFile.writeFile(fixer.topology, fixer.positions, open(output_pdb, 'w'))
+        with open(output_pdb, 'w', encoding='utf-8') as handle:
+            PDBFile.writeFile(fixer.topology, fixer.positions, handle)
         print(f"✅ Fixed missing atoms and saved cleaned file to: {output_pdb}")
-        return True
+        return "ok"
     except Exception as e:
         print(f"❌ Failed to fix atoms in {input_pdb}: {str(e)}")
-        return False
+        return "failed"
 
 
 def sanitize_pdb_for_pdbfixer(input_pdb, output_pdb):
@@ -1633,7 +1732,7 @@ def _maybe_send_menu_selection(master_fd, menu_state, chain_lookup, chain_summar
     return True
 
 
-def automate_pdb2gmx(directory, polymer_info=None):
+def automate_pdb2gmx(directory, polymer_info=None, allow_missing_atoms=False):
     """Automates GROMACS pdb2gmx selection for force field and chain-aware termini settings."""
     omp_threads = os.environ.get("OMP_NUM_THREADS") or str(multiprocessing.cpu_count())
     os.environ["OMP_NUM_THREADS"] = omp_threads
@@ -1677,9 +1776,12 @@ def automate_pdb2gmx(directory, polymer_info=None):
         )
     else:
         pdb2gmx_input_path = protein_pdb
+    missing_flag = " -missing" if allow_missing_atoms else ""
+    if allow_missing_atoms:
+        print("⚠️ Proceeding without PDBFixer/OpenMM repair; allowing pdb2gmx to continue with missing atoms.")
     command = gmx_cmd(
         "pdb2gmx",
-        f"-f {os.path.basename(pdb2gmx_input_path)} -o protein_processed.gro -p topol.top -ignh -water spc -ff {forcefield_name} -ter",
+        f"-f {os.path.basename(pdb2gmx_input_path)} -o protein_processed.gro -p topol.top -ignh -water spc -ff {forcefield_name} -ter{missing_flag}",
     )
     master_fd, slave_fd = pty.openpty()
     process = subprocess.Popen(
@@ -3303,9 +3405,28 @@ def process_directory(
     pdbfixer_ready_path = os.path.join(directory, "protein_pdbfixer_ready.pdb")
     print(f"🧼 Fixing missing atoms and adding hydrogens with PDBFixer...")
     sanitize_pdb_for_pdbfixer(protein_pdb_path, pdbfixer_ready_path)
-    if not fix_missing_atoms(pdbfixer_ready_path, fixed_pdb_path):
+    incomplete_residues = detect_incomplete_protein_residues(pdbfixer_ready_path)
+    if incomplete_residues:
+        summary = format_incomplete_residue_summary(incomplete_residues)
+        print("⚠️ Incomplete standard protein residues detected before topology generation:")
+        print(summary)
+        append_setup_log(directory, "Incomplete protein residues detected before topology generation:\n" + summary)
+    pdbfixer_status = fix_missing_atoms(pdbfixer_ready_path, fixed_pdb_path)
+    if pdbfixer_status == "unavailable" and incomplete_residues:
+        print("❌ This input requires residue repair before PyMACS can continue on this environment.")
+        print("   PDBFixer/OpenMM is unavailable here, so PyMACS cannot repair the missing atoms automatically.")
+        print("   Recommended next steps:")
+        print("   1. Re-run on a Linux/Conda environment where PDBFixer/OpenMM is available.")
+        print("   2. Repair the structure before PyMACS with a dedicated preparation tool, then rerun.")
+        print("   Suggested tools: PDBFixer, Schrödinger Protein Preparation Wizard, ChimeraX, Coot, or MODELLER.")
         return False
-    os.replace(fixed_pdb_path, protein_pdb_path)
+    if pdbfixer_status == "failed":
+        return False
+    if pdbfixer_status == "ok":
+        os.replace(fixed_pdb_path, protein_pdb_path)
+    else:
+        os.replace(pdbfixer_ready_path, protein_pdb_path)
+        append_setup_log(directory, "PDBFixer/OpenMM unavailable; continued with sanitized protein.pdb")
     original_chain_ids = [entry.get("chain_id") for entry in (polymer_info or {}).get("chains", [])]
     classified_polymer_info = classify_polymer_chains(protein_pdb_path)
     try:
@@ -3329,7 +3450,11 @@ def process_directory(
     append_setup_log(directory, f"System class: {polymer_info.get('system_class')}")
 
     # Step 2: Generate protein topology
-    if not automate_pdb2gmx(directory, polymer_info=polymer_info):
+    if not automate_pdb2gmx(
+        directory,
+        polymer_info=polymer_info,
+        allow_missing_atoms=(pdbfixer_status != "ok"),
+    ):
         return False
     system_registry_path, _ = write_system_registry(directory, polymer_info)
     print(f"🧾 Updated system registry with pdb2gmx termini: {system_registry_path}")

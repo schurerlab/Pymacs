@@ -70,26 +70,65 @@ have_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+python_version_tuple() {
+  local python_bin="$1"
+  "$python_bin" - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+}
+
+python_version_supported() {
+  local python_bin="$1"
+  "$python_bin" - <<'PY' >/dev/null
+import sys
+major, minor = sys.version_info[:2]
+raise SystemExit(0 if (major, minor) >= (3, 9) and (major, minor) <= (3, 12) else 1)
+PY
+}
+
 detect_python() {
   if [[ -n "$PYTHON_BIN" ]]; then
     if [[ -x "$PYTHON_BIN" ]]; then
+      python_version_supported "$PYTHON_BIN" || die "Specified Python must be between 3.9 and 3.12 for this package set: $PYTHON_BIN"
       return
     fi
     if have_cmd "$PYTHON_BIN"; then
       PYTHON_BIN="$(command -v "$PYTHON_BIN")"
+      python_version_supported "$PYTHON_BIN" || die "Specified Python must be between 3.9 and 3.12 for this package set: $PYTHON_BIN"
       return
     fi
     die "Specified Python is not executable: $PYTHON_BIN"
     return
   fi
 
-  if have_cmd python3; then
-    PYTHON_BIN="$(command -v python3)"
-  elif have_cmd python; then
-    PYTHON_BIN="$(command -v python)"
-  else
-    die "No suitable Python interpreter found. Install Python 3.9+ and retry."
+  local candidate
+  local resolved
+  local checked=()
+
+  for candidate in \
+    python3.12 python3.11 python3.10 python3.9 python3 python \
+    /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+    if [[ "$candidate" == /* ]]; then
+      [[ -x "$candidate" ]] || continue
+      resolved="$candidate"
+    else
+      have_cmd "$candidate" || continue
+      resolved="$(command -v "$candidate")"
+    fi
+
+    checked+=("$resolved")
+    if python_version_supported "$resolved"; then
+      PYTHON_BIN="$resolved"
+      return
+    fi
+  done
+
+  if [[ "${#checked[@]}" -eq 0 ]]; then
+    die "No Python interpreter found. Install Python 3.9-3.12 and retry."
   fi
+
+  die "No suitable Python interpreter found. Install Python 3.9-3.12 and retry. Checked: ${checked[*]}"
 }
 
 check_python_version() {
@@ -97,19 +136,31 @@ check_python_version() {
   version_output="$("$PYTHON_BIN" - <<'PY'
 import sys
 major, minor = sys.version_info[:2]
-if (major, minor) < (3, 9):
+if (major, minor) < (3, 9) or (major, minor) > (3, 12):
     raise SystemExit(f"{major}.{minor}")
 print(f"{sys.executable}|{major}.{minor}.{sys.version_info.micro}")
 PY
-)" || die "PyMACS venv setup requires Python 3.9+ because the analysis environment is defined around Python 3.9-era packages and current PyPI wheels for the selected stack are expected there or newer."
+)" || die "PyMACS venv setup requires Python 3.9-3.12 because the selected scientific stack does not install reliably on newer Python versions yet."
   log "Using Python: ${version_output#*|} (${version_output%%|*})"
 }
 
 create_venv() {
   local venv_path="$1"
+  local selected_version
+  selected_version="$(python_version_tuple "$PYTHON_BIN")"
+
   if [[ -d "$venv_path" && "$RECREATE" == true ]]; then
     log "Removing existing virtual environment: $venv_path"
     run_cmd rm -rf "$venv_path"
+  fi
+
+  if [[ -d "$venv_path" && -x "$venv_path/bin/python" ]]; then
+    local existing_version
+    existing_version="$(python_version_tuple "$venv_path/bin/python")"
+    if [[ "$existing_version" != "$selected_version" ]]; then
+      warn "Existing virtual environment at $venv_path uses Python $existing_version, but the selected interpreter is Python $selected_version. Rebuilding it."
+      run_cmd rm -rf "$venv_path"
+    fi
   fi
 
   if [[ -d "$venv_path" ]]; then
