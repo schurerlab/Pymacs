@@ -1368,6 +1368,21 @@ def rename_index_group(index_path, new_name):
         handle.writelines(lines)
 
 
+def _selection_resname_term(component_code):
+    token = (component_code or "").strip().upper()
+    if not token:
+        raise ValueError("Component code cannot be empty when building a GROMACS selection.")
+    # Quote residue names so purely numeric identifiers like 607 are parsed as names, not numbers.
+    return f'resname "{token}"'
+
+
+def _gmx_select_command(selection, output_name):
+    return gmx_cmd(
+        "select",
+        f'-s em.gro -f em.gro -n index_default.ndx -select {shlex.quote(selection)} -on {shlex.quote(output_name)}',
+    )
+
+
 def build_component_group_index(directory, components, group_name, system_registry=None):
     run_command_cpu(gmx_cmd("make_ndx", "-f em.gro -o index_default.ndx"), cwd=directory, input_text="q\n")
     if group_name == "non-Water":
@@ -1377,17 +1392,17 @@ def build_component_group_index(directory, components, group_name, system_regist
         if not selection_terms:
             selection_terms = ['group "Protein"']
         for component in components:
-            selection_terms.append(f"resname {component}")
+            selection_terms.append(_selection_resname_term(component))
         selection = " or ".join(selection_terms)
     rc = run_command_check_rc(
-        gmx_cmd("select", f'-s em.gro -f em.gro -n index_default.ndx -select "{selection}" -on index_components.ndx'),
+        _gmx_select_command(selection, "index_components.ndx"),
         cwd=directory,
     )
     if rc != 0 and group_name != "non-Water":
         print("⚠️ Polymer group selection failed; falling back to non-Water.")
         group_name = "non-Water"
         run_command_cpu(
-            gmx_cmd("select", '-s em.gro -f em.gro -n index_default.ndx -select "not group \\"Water_and_ions\\"" -on index_components.ndx'),
+            _gmx_select_command('not group "Water_and_ions"', "index_components.ndx"),
             cwd=directory,
         )
     rename_index_group(os.path.join(directory, "index_components.ndx"), group_name)
@@ -1396,6 +1411,7 @@ def build_component_group_index(directory, components, group_name, system_regist
             with open(path, "r", encoding="utf-8") as handle:
                 out.write(handle.read())
             out.write("\n")
+    return group_name
 
 
 def standardize_mdp_groups(mdp_path, coupling_group_str):
@@ -1805,7 +1821,9 @@ def setup_md(
 
     system_registry = component_context.get("system_registry") or {}
     has_nucleic_acid = bool(system_registry.get("has_nucleic_acid"))
-    effective_group_name = component_context.get("polymer_group_name") if (has_nucleic_acid or all_components) else component_group_name
+    effective_group_name = component_context.get("resolved_index_group") or (
+        component_context.get("polymer_group_name") if (has_nucleic_acid or all_components) else component_group_name
+    )
 
     # Decide the exact thermostat / COM groups based on system type
     if has_nucleic_acid or all_components:
@@ -2031,8 +2049,12 @@ def setup_md(
             print("❌ FATAL: atomIndex.txt missing for PROTAC mode.")
             exit(1)
 
-        build_component_group_index(directory, all_components, effective_group_name, system_registry=system_registry)
-        expected_group = effective_group_name
+        expected_group = build_component_group_index(
+            directory,
+            all_components,
+            effective_group_name,
+            system_registry=system_registry,
+        )
         expected_water_group = "Water_and_ions"
         print(f"✅ PROTAC index.ndx built with merged group: {expected_group}")
 
@@ -2047,7 +2069,12 @@ def setup_md(
             print(f"🧬 Using coupling/index group: {expected_group} Water_and_ions")
         else:
             print(f"💊 Ligand-bound system → building merged index group {expected_group}")
-        build_component_group_index(directory, all_components, expected_group, system_registry=system_registry)
+        expected_group = build_component_group_index(
+            directory,
+            all_components,
+            expected_group,
+            system_registry=system_registry,
+        )
 
         print(f"✅ index.ndx built cleanly: {expected_group}")
         if all_components:
@@ -2087,16 +2114,20 @@ def setup_md(
         exit(1)
 
     print(f"✅ Verified Step 5 index groups exist: {expected_group}, {expected_water_group}\n")
+    component_context["resolved_index_group"] = expected_group
 
     # ============================================================
     # 🌡️ 6–7. Equilibration
     # ============================================================
     if has_nucleic_acid or all_components:
-        expected_group = effective_group_name
+        expected_group = component_context.get("resolved_index_group") or effective_group_name
         coupling_group_str = f"{expected_group} Water_and_ions"
     else:
         expected_group = "Protein"
         coupling_group_str = "Protein Water_and_ions"
+
+    for mdp in ["md.mdp", "nvt.mdp", "npt.mdp"]:
+        standardize_mdp_groups(mdp_files[mdp], coupling_group_str)
 
     component_cutoff_nm = None
     if all_components:

@@ -201,6 +201,10 @@ from pymacs_component_utils import (
 VALID_BOX_TYPES = {"cubic", "dodecahedron", "octahedron"}
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 GMX_BIN = None
+STANDARD_PROTEIN_RESNAMES = {
+    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "HSD", "HSE", "HSP",
+    "ILE", "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+}
 
 
 def resolve_gmx_binary(requested="auto"):
@@ -1113,6 +1117,105 @@ def detect_forcefield(directory):
             return forcefield_path
     print("❗ CHARMM forcefield not found in the current directory. User must select manually.")
     return None
+
+
+def _iter_forcefield_template_paths(search_root):
+    candidate_roots = []
+    for root in (search_root, SCRIPT_DIR):
+        if root and root not in candidate_roots:
+            candidate_roots.append(root)
+    for root in candidate_roots:
+        try:
+            entries = sorted(os.listdir(root))
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.startswith("charmm36"):
+                continue
+            forcefield_dir = os.path.join(root, entry)
+            if not os.path.isdir(forcefield_dir):
+                continue
+            for filename in ("merged.rtp", "aminoacids.rtp"):
+                template_path = os.path.join(forcefield_dir, filename)
+                if os.path.exists(template_path):
+                    yield template_path
+
+
+def _load_standard_protein_atom_templates(search_root):
+    templates = {}
+    for template_path in _iter_forcefield_template_paths(search_root):
+        current_residue = None
+        in_atoms_section = False
+        try:
+            with open(template_path, "r", encoding="utf-8", errors="replace") as handle:
+                for raw in handle:
+                    stripped = raw.strip()
+                    if not stripped or stripped.startswith(("#", ";")):
+                        continue
+                    if stripped.startswith("[") and stripped.endswith("]"):
+                        section_name = stripped.strip("[]").strip()
+                        if section_name.lower() == "atoms":
+                            in_atoms_section = current_residue in STANDARD_PROTEIN_RESNAMES
+                            continue
+                        in_atoms_section = False
+                        current_residue = section_name.upper()
+                        continue
+                    if in_atoms_section:
+                        atom_name = stripped.split()[0].upper()
+                        templates.setdefault(current_residue, set()).add(atom_name)
+        except OSError:
+            continue
+        if templates:
+            break
+    return templates
+
+
+def normalize_standard_protein_atom_names(input_pdb, output_pdb, search_root=None):
+    """
+    Repair malformed standard-protein atom names when the source PDB lost the
+    leading alignment space and shifted the element symbol into the atom field.
+    """
+    templates = _load_standard_protein_atom_templates(search_root or os.path.dirname(input_pdb))
+    if not templates:
+        if os.path.abspath(input_pdb) != os.path.abspath(output_pdb):
+            shutil.copyfile(input_pdb, output_pdb)
+        print("ℹ️ Standard protein atom-name normalization skipped: no CHARMM RTP templates found.")
+        return {"changed": False, "count": 0, "examples": []}
+
+    changed_examples = []
+    changed_count = 0
+
+    with open(input_pdb, "r", encoding="utf-8", errors="replace") as fin, open(output_pdb, "w", encoding="utf-8") as fout:
+        for raw in fin:
+            line = raw
+            if raw.startswith(("ATOM", "HETATM")):
+                resname = raw[17:20].strip().upper()
+                atom_name = raw[12:16].strip().upper()
+                allowed_names = templates.get(resname)
+                if allowed_names and atom_name and atom_name not in allowed_names:
+                    replacement = None
+                    for start_index in range(1, len(atom_name)):
+                        candidate = atom_name[start_index:]
+                        if candidate in allowed_names:
+                            replacement = candidate
+                            break
+                    if replacement:
+                        rebuilt = list(raw.rstrip("\n").ljust(80))
+                        rebuilt[12:16] = list(replacement.rjust(4)[:4])
+                        line = "".join(rebuilt).rstrip() + "\n"
+                        changed_count += 1
+                        if len(changed_examples) < 8:
+                            changed_examples.append(
+                                f"{resname} {raw[21].strip() or '_'}:{raw[22:26].strip()}{raw[26].strip()} {atom_name}->{replacement}"
+                            )
+            fout.write(line)
+
+    if changed_count:
+        preview = ", ".join(changed_examples)
+        print(f"🧬 Normalized {changed_count} malformed standard-protein atom name(s): {preview}")
+    else:
+        print("🧬 Standard protein atom-name normalization: no malformed standard residue atom names detected.")
+    return {"changed": bool(changed_count), "count": changed_count, "examples": changed_examples}
 
 def _is_generated_structure_file(lower_name):
     generated_names = {
@@ -2423,6 +2526,19 @@ def graft_coords_onto_ini(ini_pdb, pose_pdb, out_pdb):
     Preserve the atom ORDER from ini_pdb (matches .itp) but replace XYZ with coords
     from pose_pdb (extracted from complex). We match records by atom name within the only residue.
     """
+    def atom_element(atom):
+        raw = atom["raw"]
+        if len(raw) >= 78:
+            element = raw[76:78].strip().upper()
+            if element:
+                return element
+        letters = "".join(ch for ch in atom["name"] if ch.isalpha()).upper()
+        if not letters:
+            return ""
+        if len(letters) > 1 and letters[:2] in {"CL", "BR", "NA", "MG", "ZN", "FE", "MN", "CA", "CU"}:
+            return letters[:2]
+        return letters[:1]
+
     def parse_pdb_atoms(path):
         atoms = []
         with open(path) as f:
@@ -2438,25 +2554,52 @@ def graft_coords_onto_ini(ini_pdb, pose_pdb, out_pdb):
     ini_atoms  = parse_pdb_atoms(ini_pdb)
     pose_atoms = parse_pdb_atoms(pose_pdb)
 
-    # Build simple name->list mapping for pose (to handle duplicates like H11/H12 etc.)
+    # Prefer exact atom-name matching, but fall back to element-preserving order
+    # when the source PDB uses generic repeated atom names.
     from collections import defaultdict, deque
     by_name = defaultdict(deque)
     for a in pose_atoms:
         by_name[a["name"]].append(a)
+    exact_name_matches = sum(1 for atom in ini_atoms if by_name[atom["name"]])
+
+    fallback_mode = None
+    fallback_queue = None
+    ini_elements = [atom_element(atom) for atom in ini_atoms]
+    pose_elements = [atom_element(atom) for atom in pose_atoms]
+    if exact_name_matches < max(3, len(ini_atoms) // 2) and len(ini_atoms) == len(pose_atoms):
+        if ini_elements == pose_elements:
+            fallback_mode = "element-ordered"
+            fallback_queue = deque(pose_atoms)
+        else:
+            grouped_ini = defaultdict(int)
+            grouped_pose = defaultdict(deque)
+            for element in ini_elements:
+                grouped_ini[element] += 1
+            for atom, element in zip(pose_atoms, pose_elements):
+                grouped_pose[element].append(atom)
+            grouped_pose_counts = {element: len(queue) for element, queue in grouped_pose.items()}
+            if dict(grouped_ini) == grouped_pose_counts:
+                fallback_mode = "element-grouped"
+                fallback_queue = grouped_pose
 
     out_lines = []
     with open(ini_pdb) as f:
         ini_lines = f.readlines()
-
+    atom_cursor = 0
     for line in ini_lines:
         if line.startswith(("ATOM", "HETATM")):
             name = line[12:16].strip()
-            if not by_name[name]:
-                # fallback: if name missing, keep original ini coords (warn)
-                # You could also relax to element-based matching here.
+            src = by_name[name].popleft() if by_name[name] else None
+            if src is None and fallback_mode == "element-ordered" and fallback_queue:
+                src = fallback_queue.popleft()
+            elif src is None and fallback_mode == "element-grouped" and fallback_queue is not None:
+                element = ini_elements[atom_cursor]
+                if fallback_queue[element]:
+                    src = fallback_queue[element].popleft()
+            atom_cursor += 1
+            if src is None:
                 out_lines.append(line)
                 continue
-            src = by_name[name].popleft()
             # write XYZ into fixed-column PDB fields (30-54)
             new = (line[:30] + f"{src['x']:8.3f}{src['y']:8.3f}{src['z']:8.3f}" + line[54:])
             out_lines.append(new)
@@ -2465,6 +2608,8 @@ def graft_coords_onto_ini(ini_pdb, pose_pdb, out_pdb):
 
     with open(out_pdb, "w") as f:
         f.writelines(out_lines)
+    if fallback_mode:
+        print(f"🧬 Ligand coordinate graft fallback used: {fallback_mode} atom matching.")
     return True
 
 
@@ -3402,7 +3547,22 @@ def process_directory(
     # Step 1.5: Clean up missing atoms and sidechains
     protein_pdb_path = os.path.join(directory, "protein.pdb")
     fixed_pdb_path = os.path.join(directory, "protein_fixed.pdb")
+    normalized_pdb_path = os.path.join(directory, "protein_atomnames_normalized.pdb")
     pdbfixer_ready_path = os.path.join(directory, "protein_pdbfixer_ready.pdb")
+    atom_name_normalization = normalize_standard_protein_atom_names(
+        protein_pdb_path,
+        normalized_pdb_path,
+        search_root=directory,
+    )
+    if atom_name_normalization.get("changed"):
+        os.replace(normalized_pdb_path, protein_pdb_path)
+        append_setup_log(
+            directory,
+            "Normalized malformed standard-protein atom names before PDBFixer:\n- "
+            + "\n- ".join(atom_name_normalization.get("examples") or []),
+        )
+    elif os.path.exists(normalized_pdb_path):
+        os.remove(normalized_pdb_path)
     print(f"🧼 Fixing missing atoms and adding hydrogens with PDBFixer...")
     sanitize_pdb_for_pdbfixer(protein_pdb_path, pdbfixer_ready_path)
     incomplete_residues = detect_incomplete_protein_residues(pdbfixer_ready_path)

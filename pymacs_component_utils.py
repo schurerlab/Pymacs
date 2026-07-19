@@ -1083,20 +1083,19 @@ def _rmsd(coords_a, coords_b):
     return float(_np.sqrt(_np.mean(_np.sum(diff * diff, axis=1))))
 
 
-def _fit_with_outlier_pruning(
-    template_heavy_by_name,
-    raw_heavy_by_name,
-    common_names,
+def _fit_with_outlier_pruning_pairs(
+    atom_pairs,
     min_common_heavy_atoms,
     max_postfit_rmsd_ang,
 ):
-    active_names = list(common_names)
-    dropped_names = []
+    active_pairs = list(atom_pairs)
+    dropped_ids = []
     best = None
 
-    while len(active_names) >= min_common_heavy_atoms:
-        template_common = [template_heavy_by_name[name] for name in active_names]
-        raw_common = [raw_heavy_by_name[name] for name in active_names]
+    while len(active_pairs) >= min_common_heavy_atoms:
+        template_common = [template_atom for _pair_id, template_atom, _raw_atom in active_pairs]
+        raw_common = [raw_atom for _pair_id, _template_atom, raw_atom in active_pairs]
+        pair_ids = [pair_id for pair_id, _template_atom, _raw_atom in active_pairs]
         template_common_coords = _coords_array(template_common)
         raw_common_coords = _coords_array(raw_common)
         rotation, translation = _kabsch_transform(template_common_coords, raw_common_coords)
@@ -1104,28 +1103,86 @@ def _fit_with_outlier_pruning(
         residuals = _np.sqrt(_np.sum((fitted_common - raw_common_coords) ** 2, axis=1)) * 10.0
         postfit_rmsd_ang = _rmsd(fitted_common, raw_common_coords) * 10.0
         worst_index = int(_np.argmax(residuals))
-        worst_name = active_names[worst_index]
+        worst_id = pair_ids[worst_index]
         worst_residual_ang = float(residuals[worst_index])
         candidate = {
-            "active_names": list(active_names),
-            "dropped_names": list(dropped_names),
+            "active_ids": list(pair_ids),
+            "dropped_ids": list(dropped_ids),
             "rotation": rotation,
             "translation": translation,
             "postfit_rmsd_ang": postfit_rmsd_ang,
             "worst_residual_ang": worst_residual_ang,
-            "worst_name": worst_name,
-            "residuals_ang": {name: float(value) for name, value in zip(active_names, residuals)},
+            "worst_name": worst_id,
+            "residuals_ang": {pair_id: float(value) for pair_id, value in zip(pair_ids, residuals)},
         }
         if best is None or candidate["postfit_rmsd_ang"] < best["postfit_rmsd_ang"]:
             best = candidate
         if postfit_rmsd_ang <= max_postfit_rmsd_ang:
             return candidate
-        if len(active_names) == min_common_heavy_atoms:
+        if len(active_pairs) == min_common_heavy_atoms:
             break
-        dropped_names.append(worst_name)
-        del active_names[worst_index]
+        dropped_ids.append(worst_id)
+        del active_pairs[worst_index]
 
     return best
+
+
+def _fit_with_outlier_pruning(
+    template_heavy_by_name,
+    raw_heavy_by_name,
+    common_names,
+    min_common_heavy_atoms,
+    max_postfit_rmsd_ang,
+):
+    atom_pairs = [
+        (name, template_heavy_by_name[name], raw_heavy_by_name[name])
+        for name in common_names
+    ]
+    fit_result = _fit_with_outlier_pruning_pairs(
+        atom_pairs,
+        min_common_heavy_atoms=min_common_heavy_atoms,
+        max_postfit_rmsd_ang=max_postfit_rmsd_ang,
+    )
+    if fit_result is None:
+        return None
+    fit_result["active_names"] = list(fit_result.get("active_ids", []))
+    fit_result["dropped_names"] = list(fit_result.get("dropped_ids", []))
+    return fit_result
+
+
+def _build_ordered_element_pairs(template_atoms, raw_atoms):
+    if len(template_atoms) != len(raw_atoms):
+        return None, "atom-count mismatch"
+
+    template_elements = [atom["element"].upper() for atom in template_atoms]
+    raw_elements = [atom["element"].upper() for atom in raw_atoms]
+    if template_elements == raw_elements:
+        return [
+            (f"{template_atom['element'].upper()}{index}", template_atom, raw_atom)
+            for index, (template_atom, raw_atom) in enumerate(zip(template_atoms, raw_atoms), start=1)
+        ], "element-ordered"
+
+    template_counts = OrderedDict()
+    raw_counts = OrderedDict()
+    for element in template_elements:
+        template_counts[element] = template_counts.get(element, 0) + 1
+    for element in raw_elements:
+        raw_counts[element] = raw_counts.get(element, 0) + 1
+    if template_counts != raw_counts:
+        return None, "element-count mismatch"
+
+    grouped_template = OrderedDict()
+    grouped_raw = OrderedDict()
+    for atom in template_atoms:
+        grouped_template.setdefault(atom["element"].upper(), []).append(atom)
+    for atom in raw_atoms:
+        grouped_raw.setdefault(atom["element"].upper(), []).append(atom)
+
+    pairs = []
+    for element, template_group in grouped_template.items():
+        for index, (template_atom, raw_atom) in enumerate(zip(template_group, grouped_raw[element]), start=1):
+            pairs.append((f"{element}{index}", template_atom, raw_atom))
+    return pairs, "element-grouped"
 
 
 def _minimum_distance_nm(atom_records_a, atom_records_b):
@@ -1321,9 +1378,14 @@ def build_component_all_copies_from_template(
     if not template_atoms:
         raise RuntimeError(f"Template PDB {complete_template_pdb} does not contain any atoms.")
 
+    template_heavy_atoms = [
+        atom
+        for atom in template_atoms
+        if atom["element"] not in {"H"} and not atom["atom_name"].upper().startswith("LP")
+    ]
     template_heavy_by_name = OrderedDict()
-    for atom in template_atoms:
-        if atom["atom_name"] not in template_heavy_by_name and atom["element"] not in {"H"} and not atom["atom_name"].upper().startswith("LP"):
+    for atom in template_heavy_atoms:
+        if atom["atom_name"] not in template_heavy_by_name:
             template_heavy_by_name[atom["atom_name"]] = atom
 
     all_atoms = parse_pdb_atom_records(original_pdb)
@@ -1344,33 +1406,50 @@ def build_component_all_copies_from_template(
     copy_reports = []
     prior_rebuilt_atoms = []
     for residue_key, raw_atoms in sorted(raw_residues.items(), key=_residue_sort_key):
-        raw_heavy_by_name = {
-            atom["atom_name"]: atom
+        raw_heavy_atoms = [
+            atom
             for atom in raw_atoms
             if atom["element"] not in {"H"} and not atom["atom_name"].upper().startswith("LP")
-        }
+        ]
+        raw_heavy_by_name = {atom["atom_name"]: atom for atom in raw_heavy_atoms}
         common_names = [name for name in template_heavy_by_name if name in raw_heavy_by_name]
-        if len(common_names) < min_common_heavy_atoms:
+        mapping_mode = "atom-name"
+        if len(common_names) >= min_common_heavy_atoms:
+            fit_result = _fit_with_outlier_pruning(
+                template_heavy_by_name,
+                raw_heavy_by_name,
+                common_names,
+                min_common_heavy_atoms=min_common_heavy_atoms,
+                max_postfit_rmsd_ang=max_postfit_rmsd_ang,
+            )
+        else:
+            fallback_pairs, mapping_mode = _build_ordered_element_pairs(template_heavy_atoms, raw_heavy_atoms)
+            if not fallback_pairs or len(fallback_pairs) < min_common_heavy_atoms:
+                raise RuntimeError(
+                    f"Cannot build topology-complete coordinates for {component_code} residue {residue_key}: "
+                    f"only {len(common_names)} common heavy atoms between template and raw PDB."
+                )
+            fit_result = _fit_with_outlier_pruning_pairs(
+                fallback_pairs,
+                min_common_heavy_atoms=min_common_heavy_atoms,
+                max_postfit_rmsd_ang=max_postfit_rmsd_ang,
+            )
+        if fit_result is None:
             raise RuntimeError(
                 f"Cannot build topology-complete coordinates for {component_code} residue {residue_key}: "
-                f"only {len(common_names)} common heavy atoms between template and raw PDB."
+                "could not determine a stable placement transform."
             )
-        fit_result = _fit_with_outlier_pruning(
-            template_heavy_by_name,
-            raw_heavy_by_name,
-            common_names,
-            min_common_heavy_atoms=min_common_heavy_atoms,
-            max_postfit_rmsd_ang=max_postfit_rmsd_ang,
-        )
         rotation = fit_result["rotation"]
         translation = fit_result["translation"]
         postfit_rmsd_ang = fit_result["postfit_rmsd_ang"]
-        active_names = fit_result["active_names"]
-        dropped_names = fit_result["dropped_names"]
+        active_names = fit_result.get("active_names", fit_result.get("active_ids", []))
+        dropped_names = fit_result.get("dropped_names", fit_result.get("dropped_ids", []))
         if postfit_rmsd_ang > max_postfit_rmsd_ang:
             raise RuntimeError(
                 f"Alignment RMSD is too high for {component_code} residue {residue_key}: "
-                f"{postfit_rmsd_ang:.3f} Å using {len(active_names)} of {len(common_names)} common heavy atoms. "
+                f"{postfit_rmsd_ang:.3f} Å using {len(active_names)} of "
+                f"{len(common_names) if mapping_mode == 'atom-name' else len(active_names)} "
+                f"{'common heavy atoms' if mapping_mode == 'atom-name' else 'fallback heavy-atom pairs'}. "
                 f"Dropped outliers: {', '.join(dropped_names) if dropped_names else 'none'}. "
                 f"Worst remaining match: {fit_result['worst_name']} ({fit_result['worst_residual_ang']:.3f} Å)."
             )
@@ -1431,6 +1510,7 @@ def build_component_all_copies_from_template(
                 "common_heavy_atoms": len(common_names),
                 "fit_heavy_atoms": len(active_names),
                 "dropped_heavy_atom_names": list(dropped_names),
+                "mapping_mode": mapping_mode,
                 "postfit_rmsd_ang": postfit_rmsd_ang,
                 "worst_remaining_residual_ang": fit_result["worst_residual_ang"],
                 "worst_remaining_atom_name": fit_result["worst_name"],
