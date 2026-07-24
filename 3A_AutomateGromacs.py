@@ -2025,10 +2025,10 @@ if not done_checkpoint("chk_D3.txt"):
 
             for frame_i in range(n_frames):
                 lig_xyz = traj.xyz[frame_i, ligand_atoms, :]
-                ca_xyz = traj.xyz[frame_i, ca_indices, :]
+                anchor_xyz = traj.xyz[frame_i, anchor_indices, :]
 
                 d = np.linalg.norm(
-                    lig_xyz[:, None, :] - ca_xyz[None, :, :],
+                    lig_xyz[:, None, :] - anchor_xyz[None, :, :],
                     axis=2
                 )
 

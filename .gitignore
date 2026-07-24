@@ -91,6 +91,9 @@ REVIEWER_RESPONSE_IMPLEMENTATION_LOG.md
 *.old
 Pasted text*.txt
 
+# Local website prototype for pymacs.com
+website/
+
 # Ignore GROMACS backup/hash files everywhere, e.g. #topol.top.1#
 \#*#
 
