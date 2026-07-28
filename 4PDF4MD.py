@@ -32,7 +32,7 @@ from pymacs_component_utils import load_system_registry
 
 from reportlab.platypus import (
     Paragraph, PageBreak, Image as RLImage,
-    BaseDocTemplate, Frame, PageTemplate
+    BaseDocTemplate, Frame, PageTemplate, Spacer
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.pagesizes import letter, landscape
@@ -270,8 +270,43 @@ def chain_label_from_index(idx: int) -> str:
     return f"{letters[(idx // 26) - 1]}{letters[idx % 26]}"
 
 
+def infer_proteins_from_analysis_results(base: str = "Analysis_Results") -> List[str]:
+    if not os.path.isdir(base):
+        return []
+
+    skip = {
+        "FullComplex",
+        "Protein",
+        "Complex",
+        "Overlay",
+        "Backbone",
+        "Ligand",
+    }
+    patterns = [
+        re.compile(r"^RMSD_(.+)\.(?:png|csv)$"),
+        re.compile(r"^RMSF_(.+?)(?:_per_residue(?:_contacts)?)?\.(?:png|csv)$"),
+        re.compile(r"^(.+)_LigandContactPersistence\.(?:png|csv)$"),
+    ]
+    proteins = []
+
+    for root, _, files in os.walk(base):
+        for filename in files:
+            for pattern in patterns:
+                match = pattern.match(filename)
+                if not match:
+                    continue
+                protein = match.group(1).strip()
+                if protein and protein not in skip and not protein.isdigit():
+                    proteins.append(protein)
+
+    return list(dict.fromkeys(proteins))
+
+
 def parse_atomindex() -> Tuple[List[str], List[str]]:
     if not os.path.exists("atomIndex.txt"):
+        inferred = infer_proteins_from_analysis_results()
+        if inferred:
+            return inferred, [chain_label_from_index(i) for i in range(len(inferred))]
         return ["Protein"], ["A"]
 
     proteins = []
@@ -286,6 +321,9 @@ def parse_atomindex() -> Tuple[List[str], List[str]]:
             chains.append(chain_label_from_index(len(chains)))
 
     if not proteins:
+        inferred = infer_proteins_from_analysis_results()
+        if inferred:
+            return inferred, [chain_label_from_index(i) for i in range(len(inferred))]
         return ["Protein"], ["A"]
 
     return proteins, chains
@@ -377,26 +415,37 @@ def find_first_existing(candidates: List[str], base: str = "Analysis_Results") -
 
 
 def generate_rdkit_hero_image_as_svg(mol2_file: str, width: int = 900, height: int = 900, use_color: bool = True) -> str:
-    result = subprocess.run(
-        ["obabel", mol2_file, "-osmi", "-xk"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=True
-    )
-
-    smiles = result.stdout.strip().split()[0]
-    mol = Chem.MolFromSmiles(smiles, sanitize=False)
+    mol = Chem.MolFromMol2File(mol2_file, sanitize=True, removeHs=True)
     if mol is None:
-        raise ValueError(f"RDKit failed to parse SMILES: {smiles}")
+        mol = Chem.MolFromMol2File(mol2_file, sanitize=False, removeHs=True)
 
-    Chem.SanitizeMol(mol, sanitizeOps=Chem.SANITIZE_ALL ^ Chem.SANITIZE_PROPERTIES)
+    if mol is None:
+        try:
+            result = subprocess.run(
+                ["obabel", mol2_file, "-osmi", "-xk"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+            smiles = result.stdout.strip().split()[0]
+            mol = Chem.MolFromSmiles(smiles, sanitize=False)
+        except (OSError, subprocess.CalledProcessError, IndexError) as exc:
+            raise ValueError(f"RDKit failed to parse MOL2 directly and Open Babel fallback failed: {mol2_file}") from exc
+
+    if mol is None:
+        raise ValueError(f"RDKit failed to parse ligand structure: {mol2_file}")
+
+    try:
+        Chem.SanitizeMol(mol, sanitizeOps=Chem.SANITIZE_ALL ^ Chem.SANITIZE_PROPERTIES)
+    except Exception:
+        pass
     Chem.rdDepictor.Compute2DCoords(mol)
 
     drawer = rdMolDraw2D.MolDraw2DSVG(width, height)
     options = drawer.drawOptions()
     options.bondLineWidth = 2
-    options.fixedBondLength = 25
+    options.padding = 0.03
     options.dotsPerAngstrom = 100
     if not use_color:
         options.useBWAtomPalette()
@@ -426,18 +475,50 @@ def add_header(canvas, doc):
 def add_ligand_to_pages(canvas, doc, small_ligand_svg: Optional[str] = None, y_offset: int = 20):
     if not small_ligand_svg:
         return
-    if doc.page % 2 == 1:
+    if doc.page > 1 and doc.page % 2 == 1:
         canvas.saveState()
         drawing = svg2rlg(small_ligand_svg)
         if drawing is not None:
-            sx = (0.8 * inch) / max(drawing.width, 1)
-            sy = (0.8 * inch) / max(drawing.height, 1)
-            drawing.scale(sx, sy)
+            scale = min(
+                (0.8 * inch) / max(drawing.width, 1),
+                (0.8 * inch) / max(drawing.height, 1),
+            )
+            drawing.scale(scale, scale)
             renderPDF.draw(drawing, canvas, 40, y_offset)
         canvas.restoreState()
 
 
-def build_title_page(flow, styles, mode: str, pretty_ligand: Optional[str], protein_title: str):
+def compact_title_description(description: str) -> str:
+    return re.sub(r"\s+", " ", description).strip()
+
+
+def make_svg_flowable(svg_path: Optional[str], max_width: float, max_height: float, h_align: str = "LEFT"):
+    if not svg_path:
+        return None
+
+    drawing = svg2rlg(svg_path)
+    if drawing is None:
+        return None
+
+    scale = min(
+        max_width / max(drawing.width, 1),
+        max_height / max(drawing.height, 1),
+    )
+    drawing.width *= scale
+    drawing.height *= scale
+    drawing.scale(scale, scale)
+    drawing.hAlign = h_align
+    return drawing
+
+
+def build_title_page(
+    flow,
+    styles,
+    mode: str,
+    pretty_ligand: Optional[str],
+    protein_title: str,
+    ligand_hero_svg: Optional[str] = None,
+):
     if mode == "ligand":
         title_text = f"MD ANALYSIS REPORT — {pretty_ligand} Bound to {protein_title}"
         description = TITLE_PAGE_DESCRIPTION_LIGAND.format(LIG=pretty_ligand, Protein=protein_title)
@@ -451,8 +532,21 @@ def build_title_page(flow, styles, mode: str, pretty_ligand: Optional[str], prot
         title_text = f"MD ANALYSIS REPORT — {protein_title}"
         description = TITLE_PAGE_DESCRIPTION_PROTEIN.format(Protein=protein_title)
 
+    title_body_style = styles["TitleBody"] if "TitleBody" in styles else styles["Body"]
+
     flow.append(Paragraph(title_text, styles["TitleBig"]))
-    flow.append(Paragraph(description.replace("\n", "<br/>"), styles["Body"]))
+    flow.append(Paragraph(compact_title_description(description), title_body_style))
+
+    ligand_hero = make_svg_flowable(
+        ligand_hero_svg,
+        max_width=2.9 * inch,
+        max_height=1.65 * inch,
+        h_align="LEFT",
+    )
+    if ligand_hero is not None:
+        flow.append(Spacer(1, 0.05 * inch))
+        flow.append(ligand_hero)
+
     flow.append(PageBreak())
 
 
@@ -759,6 +853,7 @@ def build_protac_pdf_from_manifest(manifest_csv: str):
 
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle(name="TitleBig", fontSize=22, spaceAfter=24, alignment=1, leading=28))
+    styles.add(ParagraphStyle(name="TitleBody", fontSize=10.2, leading=12.2, spaceAfter=8))
     styles.add(ParagraphStyle(name="Body", fontSize=11, leading=14, spaceAfter=12))
     styles.add(ParagraphStyle(name="CaptionTitle", fontSize=13, leading=16, spaceAfter=8, fontName="Helvetica-Bold"))
     styles.add(ParagraphStyle(name="Caption", fontSize=10, leading=13, spaceBefore=4))
@@ -828,7 +923,7 @@ def build_pdf():
         mol2_file = f"{ligand}.cgenff.mol2"
         if os.path.exists(mol2_file):
             try:
-                small_ligand_svg = generate_rdkit_hero_image_as_svg(mol2_file, width=300, height=300, use_color=True)
+                small_ligand_svg = generate_rdkit_hero_image_as_svg(mol2_file, width=700, height=420, use_color=True)
             except Exception as exc:
                 print(f"⚠️ Unable to generate ligand corner image: {exc}")
                 small_ligand_svg = None
@@ -864,6 +959,7 @@ def build_pdf():
 
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle(name="TitleBig", fontSize=22, spaceAfter=24, alignment=1, leading=28))
+    styles.add(ParagraphStyle(name="TitleBody", fontSize=10.2, leading=12.2, spaceAfter=8))
     styles.add(ParagraphStyle(name="Body", fontSize=11, leading=14, spaceAfter=12))
     styles.add(ParagraphStyle(name="CaptionTitle", fontSize=13, leading=16, spaceAfter=8, fontName="Helvetica-Bold"))
     styles.add(ParagraphStyle(name="Caption", fontSize=10, leading=13, spaceBefore=4))
@@ -890,7 +986,7 @@ def build_pdf():
     ])
 
     flow = []
-    build_title_page(flow, styles, mode, pretty_ligand, protein_title)
+    build_title_page(flow, styles, mode, pretty_ligand, protein_title, ligand_hero_svg=small_ligand_svg)
 
     any_figures_added = False
 
