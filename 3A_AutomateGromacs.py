@@ -1647,8 +1647,106 @@ def ensure_interaction_summary_columns(summary, plot_types):
 
 
 def infer_element(atom_name: str):
-    c = atom_name.strip()[:1]
-    return c if c in "ONCHSP" else None
+    s = str(atom_name).strip()
+    while s and s[0].isdigit():
+        s = s[1:]
+    if not s:
+        return None
+    two = s[:2].title()
+    if two in {"Cl", "Br"}:
+        return two
+    c = s[:1].upper()
+    return c if c in "ONCHSPFIB" else None
+
+
+def atom_element(atom):
+    try:
+        elem = str(getattr(atom, "element", "") or "").strip()
+    except Exception:
+        elem = ""
+    return elem.title() if elem else infer_element(getattr(atom, "name", ""))
+
+
+def atom_is_hydrogen(atom):
+    return atom_element(atom) == "H"
+
+
+def hbond_heavy_indices(atomgroup):
+    return [
+        i for i, atom in enumerate(atomgroup.atoms)
+        if atom_element(atom) in {"N", "O", "S"}
+    ]
+
+
+def hydrogen_indices(atomgroup):
+    return [i for i, atom in enumerate(atomgroup.atoms) if atom_is_hydrogen(atom)]
+
+
+def attached_hydrogens(donor_atom, atomgroup, h_indices, max_distance=1.35):
+    if not h_indices:
+        return []
+    h_atoms = atomgroup.atoms[h_indices]
+    deltas = h_atoms.positions - donor_atom.position
+    dists = np.linalg.norm(deltas, axis=1)
+    return [
+        h_atoms[i]
+        for i, dist in enumerate(dists)
+        if 0.6 <= float(dist) <= max_distance
+    ]
+
+
+def donor_hydrogen_acceptor_angle(donor_atom, hydrogen_atom, acceptor_atom):
+    v1 = donor_atom.position - hydrogen_atom.position
+    v2 = acceptor_atom.position - hydrogen_atom.position
+    denom = np.linalg.norm(v1) * np.linalg.norm(v2)
+    if denom == 0:
+        return None
+    cosang = np.dot(v1, v2) / denom
+    return float(np.degrees(np.arccos(np.clip(cosang, -1.0, 1.0))))
+
+
+def best_hbond_between_groups(ligand_group, ligand_heavy, ligand_hydrogens, residue_group, residue_heavy, residue_hydrogens):
+    if not ligand_heavy or not residue_heavy:
+        return None
+
+    dists = distances.distance_array(
+        ligand_group.atoms[ligand_heavy].positions,
+        residue_group.atoms[residue_heavy].positions,
+    )
+    if dists.size == 0:
+        return None
+
+    candidates = np.argwhere(dists <= HBOND_DISTANCE_CUTOFF)
+    best = None
+
+    for lig_pos, prot_pos in candidates:
+        lig_atom = ligand_group.atoms[ligand_heavy[int(lig_pos)]]
+        prot_atom = residue_group.atoms[residue_heavy[int(prot_pos)]]
+        heavy_distance = float(dists[int(lig_pos), int(prot_pos)])
+
+        donor_options = (
+            (lig_atom, ligand_group, ligand_hydrogens, prot_atom),
+            (prot_atom, residue_group, residue_hydrogens, lig_atom),
+        )
+
+        for donor_atom, donor_group, donor_h_indices, acceptor_atom in donor_options:
+            for hydrogen_atom in attached_hydrogens(donor_atom, donor_group, donor_h_indices):
+                angle = donor_hydrogen_acceptor_angle(donor_atom, hydrogen_atom, acceptor_atom)
+                if angle is None or angle < HBOND_ANGLE_CUTOFF:
+                    continue
+                score = (angle, -heavy_distance)
+                if best is None or score > best["score"]:
+                    best = {
+                        "score": score,
+                        "lig_atom": lig_atom,
+                        "prot_atom": prot_atom,
+                        "distance": heavy_distance,
+                        "donor_atom": donor_atom,
+                        "acceptor_atom": acceptor_atom,
+                        "angle": angle,
+                    }
+
+    return best
 
 # ============================================================
 # Utilities for Checkpointing and RMSD Compatibility
@@ -2679,7 +2777,7 @@ else:
 
     # Storage tables
     interaction_data = []          # (Time_ps, Residue)
-    framewise_interaction_rows = []  # (Time_ns, Residue, Type)
+    framewise_interaction_rows = []  # (Time_ns, Residue, Type, atoms, distance, optional H-bond geometry)
 
     # ============================================================
     # STEP E1 — CONTACT DETECTION (RESIDUE LEVEL)
@@ -2938,6 +3036,18 @@ else:
 
     phase("STEP E2 — Classifying Interaction Types")
 
+    ligand_hbond_heavy = hbond_heavy_indices(pocket_ligand)
+    ligand_hydrogens = hydrogen_indices(pocket_ligand)
+    residue_hbond_lookup = {
+        res.ix: (hbond_heavy_indices(res.atoms), hydrogen_indices(res.atoms))
+        for res in pocket_protein.residues
+    }
+    print(
+        "📐 H-bond geometry scan: "
+        f"{len(ligand_hbond_heavy)} ligand donor/acceptor heavy atoms, "
+        f"{len(ligand_hydrogens)} ligand hydrogens"
+    )
+
     def classify_frame(ts):
         time_ns = ts.time / 1000.0
         ligand_positions = pocket_ligand.positions
@@ -2965,11 +3075,22 @@ else:
             prot_atom = res_atoms[prot_j]
 
             itype = None
+            hbond = best_hbond_between_groups(
+                pocket_ligand,
+                ligand_hbond_heavy,
+                ligand_hydrogens,
+                res_atoms,
+                residue_hbond_lookup.get(res.ix, ([], []))[0],
+                residue_hbond_lookup.get(res.ix, ([], []))[1],
+            )
 
-            # H-bond detection
-            if infer_element(prot_atom.name) in ("O","N") and infer_element(lig_atom.name) in ("O","N"):
-                if min_dist < HBOND_DISTANCE_CUTOFF:
-                    itype = "H-bond"
+            # H-bond detection: scan all hetero-heavy atom pairs and require
+            # explicit donor-H-acceptor geometry when hydrogens are present.
+            if hbond is not None:
+                itype = "H-bond"
+                lig_atom = hbond["lig_atom"]
+                prot_atom = hbond["prot_atom"]
+                min_dist = hbond["distance"]
 
             # Hydrophobic
             if itype is None and res.resname in {"PHE","LEU","ILE","VAL","MET","TRP","TYR","ALA"} and min_dist < 4.5:
@@ -2980,11 +3101,15 @@ else:
                 itype = "Ionic"
 
             if itype:
+                donor_name = hbond["donor_atom"].name if hbond is not None else None
+                acceptor_name = hbond["acceptor_atom"].name if hbond is not None else None
+                hbond_angle = hbond["angle"] if hbond is not None else np.nan
                 rows.append((
                     time_ns, rid, itype,
                     lig_atom.name, lig_atom.index,
                     prot_atom.name, prot_atom.index,
-                    float(min_dist)
+                    float(min_dist),
+                    donor_name, acceptor_name, hbond_angle
                 ))
 
         return rows
@@ -3003,7 +3128,8 @@ else:
             "Time_ns", "Residue", "Type",
             "LigAtomName", "LigAtomIndex",
             "ProtAtomName", "ProtAtomIndex",
-            "Distance"
+            "Distance",
+            "HbondDonorAtom", "HbondAcceptorAtom", "HbondAngle"
         ]
     )
 
@@ -3491,7 +3617,13 @@ else:
     ]
 
     # --- Hydrogen-bond persistence ---
-    hbond_df = int_df[int_df["Type"].str.lower().isin(["hbond", "hydrogen_bond"])]
+    hbond_key = (
+        int_df["Type"]
+        .astype(str)
+        .str.lower()
+        .str.replace(r"[-_\s]", "", regex=True)
+    )
+    hbond_df = int_df[hbond_key.isin(["hbond", "hydrogenbond"])]
 
 
     hbond_persistence = (
