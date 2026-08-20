@@ -105,6 +105,24 @@ For questions about PyMACS, molecular dynamics workflow support, CGenFF setup, G
 
 ---
 
+<a id="gromacs-installation-first"></a>
+
+## 🧱 Need GROMACS installed first?
+
+If you do **not** already have GROMACS installed, start with the companion quick-install repository before setting up PyMACS:
+
+<p align="center">
+  <a href="https://github.com/Joey305/gromacs-installation">
+    <img src="https://img.shields.io/badge/Install%20GROMACS-Quick%20Setup-green?style=for-the-badge&logo=github" alt="Install GROMACS quickly">
+  </a>
+</p>
+
+- **Companion installer:** [Joey305/gromacs-installation](https://github.com/Joey305/gromacs-installation)
+- Use that repository first if you need a fast path to getting GROMACS installed and available on your machine.
+- Once GROMACS is working and the `gmx`, `gmx_mpi`, or `gmx-mpi` command is available in your environment, come back here and continue with the PyMACS install steps below.
+
+---
+
 <a id="super-quick-start-install"></a>
 
 ## ⚡ Super Quick Start Install (lightweight)
@@ -388,6 +406,9 @@ Core goals:
   <a href="#quick-start-install">
     <img src="https://img.shields.io/badge/Install-Full%20Quick%20Start-yellow?style=for-the-badge&logo=gnubash" alt="Full Quick Start Install">
   </a>
+  <a href="https://github.com/Joey305/gromacs-installation">
+    <img src="https://img.shields.io/badge/Install%20GROMACS-Quick%20Setup-green?style=for-the-badge&logo=github" alt="Install GROMACS quickly">
+  </a>
   <a href="#quick-start-templates">
     <img src="https://img.shields.io/badge/Get%20Started-Quick%20Start-orange?style=for-the-badge&logo=gnubash" alt="Get started with PyMACS">
   </a>
@@ -404,6 +425,7 @@ Core goals:
 
 - [Super Quick Start Install (lightweight)](#super-quick-start-install)
 - [Full Quick Start Install](#quick-start-install)
+- [Need GROMACS installed first?](#gromacs-installation-first)
 - [What’s in this repo](#repository-layout)
 - [System requirements](#system-requirements)
 - [Environment setup](#environment-setup)
@@ -495,6 +517,7 @@ The repository may include additional helper scripts or files as the project evo
 - **OS:** Linux or WSL2 recommended  
   - macOS can be used for analysis-only workflows, but GROMACS installation and GPU support vary.
 - **GROMACS:** 2022+ recommended  
+  - If you do not have GROMACS installed yet, use the companion quick installer: [Joey305/gromacs-installation](https://github.com/Joey305/gromacs-installation).
   - Standard scripts expect a working `gmx` command in the active environment.
   - MPI-compatible scripts support `gmx`, `gmx_mpi`, `gmx-mpi`, or an explicit executable path.
   - MPI-compatible scripts accept `--gmx-bin`.
