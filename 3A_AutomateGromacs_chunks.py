@@ -120,6 +120,7 @@ import argparse
 import subprocess
 import shlex
 import re
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -149,6 +150,12 @@ from pymacs_component_utils import (
     merged_component_group_name,
     parse_component_list,
     polymer_type_label,
+)
+from pymacs_analysis_cache import (
+    compute_signature,
+    fingerprint_files,
+    record_stage_completion,
+    validate_stage_cache,
 )
 
 
@@ -1661,6 +1668,8 @@ def infer_element(atom_name: str):
 # Utilities for Checkpointing and RMSD Compatibility
 # ============================================================
 
+ANALYSIS_MANIFEST_PATH = os.path.join(OUTPUT_DIR, "analysis_manifest.json")
+
 def checkpoint(path):
     with open(path, "w") as f:
         f.write("done")
@@ -1669,13 +1678,237 @@ def done_checkpoint(path):
     return os.path.exists(path)
 
 
+def _analysis_input_files():
+    return {
+        "topology": str(Path(TOPO_FILE).resolve()),
+        "trajectory": str(Path(TRAJ_FILE).resolve()),
+        "atomindex": str(Path("atomIndex.txt").resolve()),
+    }
+
+
+def _analysis_mode():
+    if PROTAC_MODE:
+        return "protac_like"
+    if INTERFACE_RIN_MODE:
+        return "protein_interface"
+    if PARTNER_MODE:
+        return "ligand_bound"
+    return "protein_only"
+
+
+def _stage_signature(data_parameters=None):
+    return compute_signature(
+        {
+            "inputs": fingerprint_files(_analysis_input_files()),
+            "parameters": data_parameters or {},
+        }
+    )
+
+
+def _record_stage_manifest(stage_name, numerical_outputs, plot_outputs=None, data_parameters=None, legacy_adopted=False):
+    return record_stage_completion(
+        ANALYSIS_MANIFEST_PATH,
+        stage_name=stage_name,
+        analysis_script=Path(__file__).name,
+        analysis_source_path=__file__,
+        input_files=_analysis_input_files(),
+        data_parameters=data_parameters or {},
+        plot_parameters={},
+        outputs=numerical_outputs,
+        plot_outputs=plot_outputs or [],
+        system=_analysis_mode(),
+        mode=_analysis_mode(),
+        legacy_adopted=legacy_adopted,
+    )
+
+
+def _stage_cache_ready(stage_name, checkpoint_name, numerical_outputs, plot_outputs=None, data_parameters=None):
+    status = validate_stage_cache(
+        manifest_path=ANALYSIS_MANIFEST_PATH,
+        stage_name=stage_name,
+        required_outputs=numerical_outputs,
+        current_data_signature=_stage_signature(data_parameters),
+        checkpoint_path=checkpoint_name,
+    )
+    if status["reusable"]:
+        if status["legacy_adopt"]:
+            _record_stage_manifest(
+                stage_name,
+                numerical_outputs=numerical_outputs,
+                plot_outputs=plot_outputs or [],
+                data_parameters=data_parameters,
+                legacy_adopted=True,
+            )
+        return True
+
+    if os.path.exists(checkpoint_name):
+        if status["reason"] == "required_outputs_missing":
+            print(f"⚠️ {stage_name}: checkpoint exists but required reusable outputs are missing or empty; rerunning stage.")
+        elif status["reason"] == "data_signature_mismatch":
+            print(f"⚠️ {stage_name}: checkpoint exists but data-affecting inputs changed; rerunning stage.")
+    return False
+
+
+def _current_chain_names():
+    chain_map = parse_atomindex_file("atomIndex.txt")
+    if chain_map:
+        return list(chain_map.keys())
+    if active_chains:
+        return list(active_chains.keys())
+    return ["Protein"]
+
+
+def _expected_dssp_chain_labels():
+    count = max(1, len(_current_chain_names()))
+    labels = []
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    for idx in range(count):
+        if idx < len(alphabet):
+            labels.append(alphabet[idx])
+        else:
+            labels.append(f"{alphabet[idx // 26 - 1]}{alphabet[idx % 26]}")
+    return labels
+
+
+def _ligand_token():
+    return (ligand_code or compound_name or "Ligand").upper()
+
+
+def _compound_token():
+    return compound_name or _ligand_token()
+
+
+def _stage_d1_outputs():
+    return ([os.path.join(OUTPUT_DIR, "Protein_RMSD.csv")], [os.path.join(OUTPUT_DIR, "Protein_RMSD.png")], {})
+
+
+def _stage_d2_outputs():
+    ligand_token = _ligand_token()
+    compound_token = _compound_token()
+    return (
+        [
+            os.path.join(OUTPUT_DIR, f"{compound_token}_Ligand_RMSD.csv"),
+            os.path.join(OUTPUT_DIR, f"{compound_token}_Ligand_RMSF.csv"),
+        ],
+        [
+            os.path.join(OUTPUT_DIR, f"{ligand_token}_Ligand_RMSD.png"),
+            os.path.join(OUTPUT_DIR, f"{ligand_token}_Ligand_RMSF.png"),
+        ],
+        {"ligand_code": ligand_token},
+    )
+
+
+def _stage_d3_outputs():
+    chains = _current_chain_names()
+    numerical = []
+    plots = []
+    for chain in chains:
+        numerical.extend(
+            [
+                os.path.join(OUTPUT_DIR, f"RMSD_{chain}.csv"),
+                os.path.join(OUTPUT_DIR, f"RMSF_{chain}.csv"),
+                os.path.join(OUTPUT_DIR, f"RMSF_{chain}_per_residue.csv"),
+            ]
+        )
+        plots.extend(
+            [
+                os.path.join(OUTPUT_DIR, f"RMSD_{chain}.png"),
+                os.path.join(OUTPUT_DIR, f"RMSF_{chain}.png"),
+                os.path.join(OUTPUT_DIR, f"RMSF_{chain}_per_residue_contacts.png"),
+            ]
+        )
+        if PARTNER_MODE:
+            numerical.append(os.path.join(OUTPUT_DIR, f"{chain}_LigandContactPersistence.csv"))
+    params = {"chains": chains}
+    if PARTNER_MODE:
+        params.update({"contact_cutoff_A": float(args.contact_cutoff), "min_contact_frac": float(args.min_contact_frac)})
+    return numerical, plots, params
+
+
+def _stage_d4_outputs():
+    ligand_token = _ligand_token()
+    return (
+        [os.path.join(OUTPUT_DIR, f"{ligand_token}_Complex_RMSD_Overlay.csv")],
+        [os.path.join(OUTPUT_DIR, f"{ligand_token}_Complex_RMSD_Overlay.png")],
+        {"ligand_code": ligand_token},
+    )
+
+
+def _stage_d4b_outputs():
+    if PARTNER_MODE:
+        return ([os.path.join(OUTPUT_DIR, "Radius_of_Gyration_Protein_Ligand_Complex.csv")], [os.path.join(OUTPUT_DIR, "Radius_of_Gyration_Overlay.png")], {})
+    return ([os.path.join(OUTPUT_DIR, "Radius_of_Gyration_Protein.csv")], [os.path.join(OUTPUT_DIR, "Radius_of_Gyration_Protein.png")], {})
+
+
+def _stage_d5_outputs():
+    return ([os.path.join(OUTPUT_DIR, "FullComplex_RMSD.csv")], [os.path.join(OUTPUT_DIR, "FullComplex_RMSD.png")], {})
+
+
+def _stage_d6_outputs():
+    return (
+        [
+            os.path.join(OUTPUT_DIR, "DSSP_raw.csv"),
+            os.path.join(OUTPUT_DIR, "DSSP_encoded_numeric.csv"),
+            os.path.join(OUTPUT_DIR, "SSE_Fractions.csv"),
+        ],
+        [os.path.join(OUTPUT_DIR, "DSSP_Heatmap.png"), os.path.join(OUTPUT_DIR, "SSE_Fractions.png")],
+        {},
+    )
+
+
+def _stage_d6b_outputs():
+    numerical = []
+    plots = []
+    for label in _expected_dssp_chain_labels():
+        numerical.extend([os.path.join(OUTPUT_DIR, f"DSSP_chain_{label}.csv"), os.path.join(OUTPUT_DIR, f"SSE_chain_{label}_fractions.csv")])
+        plots.extend([os.path.join(OUTPUT_DIR, f"DSSP_chain_{label}_heatmap.png"), os.path.join(OUTPUT_DIR, f"SSE_chain_{label}_fractions.png")])
+    return numerical, plots, {"chains": _expected_dssp_chain_labels()}
+
+
+def _stage_d6c_outputs():
+    return (
+        [os.path.join(OUTPUT_DIR, "Residue_SSE_Persistence.csv")],
+        [
+            os.path.join(OUTPUT_DIR, "Residue_Helix_Persistence.png"),
+            os.path.join(OUTPUT_DIR, "Residue_Sheet_Persistence.png"),
+            os.path.join(OUTPUT_DIR, "Residue_Flexibility.png"),
+        ],
+        {},
+    )
+
+
+def _stage_d6d_outputs():
+    ligand_token = _ligand_token()
+    return (
+        [
+            os.path.join(OUTPUT_DIR, f"{ligand_token}_ChangePoint_Summary.csv"),
+            os.path.join(OUTPUT_DIR, f"{ligand_token}_SSE_Contact_Coupling_Timeseries.csv"),
+        ],
+        [os.path.join(OUTPUT_DIR, f"{ligand_token}_SSE_vs_LigandContacts_Dynamics.png")],
+        {"contact_cutoff_A": float(args.contact_cutoff), "ligand_code": ligand_token},
+    )
+
+
+def _interface_chain_pairs_for_manifest():
+    if args.interface_chain_pairs:
+        return [token.strip() for token in str(args.interface_chain_pairs).split(",") if token.strip()]
+    labels = []
+    for left, right in combinations(polymer_chain_entries, 2):
+        labels.append(f"{left['display_label']}:{right['display_label']}")
+    return labels
+
+
 def interface_rin_outputs_present(outdir):
     required = [
         os.path.join(outdir, "interface_chain_pair_summary.csv"),
+        os.path.join(outdir, "interface_contact_timeseries.csv"),
         os.path.join(outdir, "interface_residue_pair_contacts.csv"),
-        os.path.join(outdir, "Interface_RIN_Network.png"),
+        os.path.join(outdir, "interface_node_summary.csv"),
+        os.path.join(outdir, "interface_frame_index.csv"),
+        os.path.join(outdir, "interface_residue_pair_framewise.csv.gz"),
+        os.path.join(outdir, "interface_residue_pair_presence.npz"),
     ]
-    return all(os.path.exists(path) for path in required)
+    return all(os.path.exists(path) and os.path.getsize(path) > 0 for path in required)
 
 
 def dispatch_to_interface_rin():
@@ -1720,6 +1953,32 @@ def dispatch_to_interface_rin():
     if not interface_rin_outputs_present(outdir):
         raise SystemExit("❌ 3C_Interface_RIN.py completed but expected interface outputs were not found.")
 
+    _record_stage_manifest(
+        "EINTERFACE",
+        numerical_outputs=[
+            os.path.join(outdir, "interface_chain_pair_summary.csv"),
+            os.path.join(outdir, "interface_contact_timeseries.csv"),
+            os.path.join(outdir, "interface_residue_pair_contacts.csv"),
+            os.path.join(outdir, "interface_node_summary.csv"),
+            os.path.join(outdir, "interface_frame_index.csv"),
+            os.path.join(outdir, "interface_residue_pair_framewise.csv.gz"),
+            os.path.join(outdir, "interface_residue_pair_presence.npz"),
+        ],
+        plot_outputs=[
+            os.path.join(outdir, "Interface_ChainPair_ContactFractions.png"),
+            os.path.join(outdir, "Interface_ContactCount_Timeseries.png"),
+            os.path.join(outdir, "Interface_MinDistance_Timeseries.png"),
+            os.path.join(outdir, "Interface_ResiduePair_ContactHeatmap.png"),
+            os.path.join(outdir, "Interface_RIN_Network.png"),
+            os.path.join(outdir, "Interface_ChainLevel_Network.png"),
+            os.path.join(outdir, "Interface_TopResiduePairs_Barplot.png"),
+        ],
+        data_parameters={
+            "contact_cutoff_A": float(args.interface_contact_cutoff),
+            "frame_step": int(args.interface_frame_step),
+            "selected_chain_pairs": _interface_chain_pairs_for_manifest(),
+        },
+    )
     checkpoint("chk_EINTERFACE.txt")
     print("✅ STEP E-INTERFACE complete.")
 
@@ -1995,7 +2254,8 @@ def get_aligned_traj_and_ligand():
 # ============================================================
 
 # ------------------ STEP D1 replacement (Protein RMSD) ------------------
-if not done_checkpoint("chk_D1.txt"):
+_d1_num, _d1_plot, _d1_params = _stage_d1_outputs()
+if not _stage_cache_ready("D1", "chk_D1.txt", _d1_num, _d1_plot, _d1_params):
     phase("STEP D1 — Global Protein RMSD")
 
     ref, bb, ligand_atoms, lig_resname = get_traj_metadata()
@@ -2014,6 +2274,7 @@ if not done_checkpoint("chk_D1.txt"):
     savefig(os.path.join(OUTPUT_DIR, "Protein_RMSD.png"))
 
     checkpoint("chk_D1.txt")
+    _record_stage_manifest("D1", _d1_num, _d1_plot, _d1_params)
     print("✅ STEP D1 complete.")
 else:
     print("⏭️ STEP D1 skipped (checkpoint found).")
@@ -2026,49 +2287,51 @@ else:
 # ------------------ STEP D2 replacement (Ligand RMSD & RMSF) ------------------
 if not PARTNER_MODE:
     print("⏭️ STEP D2 skipped (protein-centric mode).")
-elif not done_checkpoint("chk_D2.txt"):
-    phase("STEP D2 — Ligand RMSD & RMSF")
-
-    ref, bb, ligand_atoms, lig_resname = get_traj_metadata()
-
-    print("📈 Ligand RMSD…")
-    time_ps, lig_rmsd = chunked_rmsd(ligand_atoms, label="Ligand RMSD")
-
-    print("📈 Ligand RMSF…")
-    rmsf, _ = chunked_rmsf(ligand_atoms, label="Ligand RMSF")
-
-    pd.DataFrame({"Time_ps": time_ps, "Ligand_RMSD": lig_rmsd}).to_csv(
-        os.path.join(OUTPUT_DIR, f"{compound_name}_Ligand_RMSD.csv"), index=False
-    )
-    pd.DataFrame({"Atom": ligand_atoms, "RMSF": rmsf}).to_csv(
-        os.path.join(OUTPUT_DIR, f"{compound_name}_Ligand_RMSF.csv"), index=False
-    )
-
-    plt.figure(figsize=(9,5))
-    plt.plot(time_ps/1000.0, lig_rmsd, color=MIAMI_GREEN, lw=1.6)
-    plt.title(f"{compound_name} Ligand RMSD")
-    plt.xlabel("Time (ns)")
-    plt.ylabel("RMSD (Å)")
-    savefig(os.path.join(OUTPUT_DIR, f"{lig_resname}_Ligand_RMSD.png"))
-
-    plt.figure(figsize=(8,4))
-    plt.plot(rmsf, color=MIAMI_GREEN, lw=1.6)
-    plt.title(f"{compound_name} Ligand RMSF")
-    plt.xlabel("Ligand Atom Index")
-    plt.ylabel("RMSF (Å)")
-    savefig(os.path.join(OUTPUT_DIR, f"{lig_resname}_Ligand_RMSF.png"))
-
-    checkpoint("chk_D2.txt")
-    print("✅ STEP D2 complete.")
 else:
-    print("⏭️ STEP D2 skipped (checkpoint found).")
+    _d2_num, _d2_plot, _d2_params = _stage_d2_outputs()
+    if _stage_cache_ready("D2", "chk_D2.txt", _d2_num, _d2_plot, _d2_params):
+        print("⏭️ STEP D2 skipped (checkpoint found).")
+    else:
+        phase("STEP D2 — Ligand RMSD & RMSF")
 
+        ref, bb, ligand_atoms, lig_resname = get_traj_metadata()
 
+        print("📈 Ligand RMSD…")
+        time_ps, lig_rmsd = chunked_rmsd(ligand_atoms, label="Ligand RMSD")
+
+        print("📈 Ligand RMSF…")
+        rmsf, _ = chunked_rmsf(ligand_atoms, label="Ligand RMSF")
+
+        pd.DataFrame({"Time_ps": time_ps, "Ligand_RMSD": lig_rmsd}).to_csv(
+            os.path.join(OUTPUT_DIR, f"{compound_name}_Ligand_RMSD.csv"), index=False
+        )
+        pd.DataFrame({"Atom": ligand_atoms, "RMSF": rmsf}).to_csv(
+            os.path.join(OUTPUT_DIR, f"{compound_name}_Ligand_RMSF.csv"), index=False
+        )
+
+        plt.figure(figsize=(9,5))
+        plt.plot(time_ps/1000.0, lig_rmsd, color=MIAMI_GREEN, lw=1.6)
+        plt.title(f"{compound_name} Ligand RMSD")
+        plt.xlabel("Time (ns)")
+        plt.ylabel("RMSD (Å)")
+        savefig(os.path.join(OUTPUT_DIR, f"{lig_resname}_Ligand_RMSD.png"))
+
+        plt.figure(figsize=(8,4))
+        plt.plot(rmsf, color=MIAMI_GREEN, lw=1.6)
+        plt.title(f"{compound_name} Ligand RMSF")
+        plt.xlabel("Ligand Atom Index")
+        plt.ylabel("RMSF (Å)")
+        savefig(os.path.join(OUTPUT_DIR, f"{lig_resname}_Ligand_RMSF.png"))
+
+        checkpoint("chk_D2.txt")
+        _record_stage_manifest("D2", _d2_num, _d2_plot, _d2_params)
+        print("✅ STEP D2 complete.")
 # ============================================================
 # STEP D3 — PER-CHAIN RMSD / RMSF (ATOM + RESIDUE + PERSISTENCE)
 # ============================================================
 
-if not done_checkpoint("chk_D3.txt"):
+_d3_num, _d3_plot, _d3_params = _stage_d3_outputs()
+if not _stage_cache_ready("D3", "chk_D3.txt", _d3_num, _d3_plot, _d3_params):
     phase("STEP D3 — Per-Chain RMSD / RMSF")
 
     ref, bb, ligand_atoms, lig_resname = get_traj_metadata()
@@ -2302,6 +2565,7 @@ if not done_checkpoint("chk_D3.txt"):
         plt.close()
 
     checkpoint("chk_D3.txt")
+    _record_stage_manifest("D3", _d3_num, _d3_plot, _d3_params)
     print("✅ STEP D3 complete.")
 
 else:
@@ -2315,7 +2579,7 @@ else:
 # ------------------ STEP D4 replacement (Bound Complex RMSD) ------------------
 if not PARTNER_MODE:
     print("⏭️ STEP D4 skipped (protein-centric mode).")
-elif not done_checkpoint("chk_D4.txt"):
+elif not _stage_cache_ready("D4", "chk_D4.txt", *_stage_d4_outputs()):
     phase("STEP D4 — Bound Complex RMSD (Dual-Axis)")
 
     ref, bb, ligand_atoms, lig_resname = get_traj_metadata()
@@ -2358,6 +2622,8 @@ elif not done_checkpoint("chk_D4.txt"):
                          f"{lig_resname}_Complex_RMSD_Overlay.png"))
 
     checkpoint("chk_D4.txt")
+    _d4_num, _d4_plot, _d4_params = _stage_d4_outputs()
+    _record_stage_manifest("D4", _d4_num, _d4_plot, _d4_params)
     print("✅ STEP D4 complete.")
 else:
     print("⏭️ STEP D4 skipped (checkpoint found).")
@@ -2371,7 +2637,8 @@ else:
 # STEP D4B — Radius of Gyration (Protein / Ligand / Complex)
 # ============================================================
 
-if not done_checkpoint("chk_D4B.txt"):
+_d4b_num, _d4b_plot, _d4b_params = _stage_d4b_outputs()
+if not _stage_cache_ready("D4B", "chk_D4B.txt", _d4b_num, _d4b_plot, _d4b_params):
     phase("STEP D4B — Radius of Gyration")
 
     ref, bb, ligand_atoms, lig_resname = get_traj_metadata()
@@ -2436,6 +2703,7 @@ if not done_checkpoint("chk_D4B.txt"):
         savefig(os.path.join(OUTPUT_DIR, "Radius_of_Gyration_Overlay.png"))
 
     checkpoint("chk_D4B.txt")
+    _record_stage_manifest("D4B", _d4b_num, _d4b_plot, _d4b_params)
     print("✅ STEP D4B complete.")
 
 else:
@@ -2452,7 +2720,8 @@ else:
 # ============================================================
 
 # ------------------ STEP D5 replacement (Full System RMSD) ------------------
-if not done_checkpoint("chk_D5.txt"):
+_d5_num, _d5_plot, _d5_params = _stage_d5_outputs()
+if not _stage_cache_ready("D5", "chk_D5.txt", _d5_num, _d5_plot, _d5_params):
     phase("STEP D5 — Full Complex RMSD")
 
     ref, bb, ligand_atoms, lig_resname = get_traj_metadata()
@@ -2474,6 +2743,7 @@ if not done_checkpoint("chk_D5.txt"):
     savefig(os.path.join(OUTPUT_DIR, "FullComplex_RMSD.png"))
 
     checkpoint("chk_D5.txt")
+    _record_stage_manifest("D5", _d5_num, _d5_plot, _d5_params)
     print("✅ STEP D5 complete.")
 else:
     print("⏭️ STEP D5 skipped (checkpoint found).")
@@ -2483,7 +2753,8 @@ else:
 # STEP D6 — Secondary Structure Evolution (DSSP)
 # ============================================================
 
-if not done_checkpoint("chk_D6.txt"):
+_d6_num, _d6_plot, _d6_params = _stage_d6_outputs()
+if not _stage_cache_ready("D6", "chk_D6.txt", _d6_num, _d6_plot, _d6_params):
     phase("STEP D6 — Secondary Structure Evolution (DSSP)")
 
     print(f"📐 Computing DSSP in chunks of {CHUNK_SIZE} frames...")
@@ -2561,6 +2832,7 @@ if not done_checkpoint("chk_D6.txt"):
     savefig(os.path.join(OUTPUT_DIR, "SSE_Fractions.png"))
 
     checkpoint("chk_D6.txt")
+    _record_stage_manifest("D6", _d6_num, _d6_plot, _d6_params)
     print("✅ STEP D6 complete — DSSP analysis finished.\n")
 
 else:
@@ -2583,7 +2855,8 @@ def chain_index_to_letter(idx):
 
 
 
-if not done_checkpoint("chk_D6B.txt"):
+_d6b_num, _d6b_plot, _d6b_params = _stage_d6b_outputs()
+if not _stage_cache_ready("D6B", "chk_D6B.txt", _d6b_num, _d6b_plot, _d6b_params):
     phase("STEP D6B — Per-Chain Secondary Structure Evolution")
 
     ref, bb, ligand_atoms, lig_resname = get_traj_metadata()
@@ -2682,6 +2955,7 @@ if not done_checkpoint("chk_D6B.txt"):
 
 
     checkpoint("chk_D6B.txt")
+    _record_stage_manifest("D6B", _d6b_num, _d6b_plot, _d6b_params)
     print("✅ STEP D6B complete.\n")
 
 else:
@@ -2700,7 +2974,8 @@ else:
 # STEP D6C — Residue-Level SSE Persistence Ranking
 # ============================================================
 
-if not done_checkpoint("chk_D6C.txt"):
+_d6c_num, _d6c_plot, _d6c_params = _stage_d6c_outputs()
+if not _stage_cache_ready("D6C", "chk_D6C.txt", _d6c_num, _d6c_plot, _d6c_params):
     phase("STEP D6C — Residue-Level SSE Persistence Ranking")
 
     int_dssp, time_ns = get_dssp_numeric_and_time()
@@ -2748,6 +3023,7 @@ if not done_checkpoint("chk_D6C.txt"):
     savefig(os.path.join(OUTPUT_DIR, "Residue_Flexibility.png"))
 
     checkpoint("chk_D6C.txt")
+    _record_stage_manifest("D6C", _d6c_num, _d6c_plot, _d6c_params)
     print("✅ STEP D6C complete.\n")
 
 else:
@@ -2762,24 +3038,47 @@ else:
 phase("STEP E-INTERFACE — Protein-Protein / Protein-Peptide Interface RIN Analysis")
 if INTERFACE_RIN_MODE and not args.skip_interface_rin:
     interface_outdir = os.path.join(args.outdir, "Interface_RIN")
-    if done_checkpoint("chk_EINTERFACE.txt"):
+    _e_num = [
+        os.path.join(interface_outdir, "interface_chain_pair_summary.csv"),
+        os.path.join(interface_outdir, "interface_contact_timeseries.csv"),
+        os.path.join(interface_outdir, "interface_residue_pair_contacts.csv"),
+        os.path.join(interface_outdir, "interface_node_summary.csv"),
+        os.path.join(interface_outdir, "interface_frame_index.csv"),
+        os.path.join(interface_outdir, "interface_residue_pair_framewise.csv.gz"),
+        os.path.join(interface_outdir, "interface_residue_pair_presence.npz"),
+    ]
+    _e_plot = [
+        os.path.join(interface_outdir, "Interface_ChainPair_ContactFractions.png"),
+        os.path.join(interface_outdir, "Interface_ContactCount_Timeseries.png"),
+        os.path.join(interface_outdir, "Interface_MinDistance_Timeseries.png"),
+        os.path.join(interface_outdir, "Interface_ResiduePair_ContactHeatmap.png"),
+        os.path.join(interface_outdir, "Interface_RIN_Network.png"),
+        os.path.join(interface_outdir, "Interface_ChainLevel_Network.png"),
+        os.path.join(interface_outdir, "Interface_TopResiduePairs_Barplot.png"),
+    ]
+    _e_params = {
+        "contact_cutoff_A": float(args.interface_contact_cutoff),
+        "frame_step": int(args.interface_frame_step),
+        "selected_chain_pairs": _interface_chain_pairs_for_manifest(),
+    }
+    if _stage_cache_ready("EINTERFACE", "chk_EINTERFACE.txt", _e_num, _e_plot, _e_params):
+        print("⏭️ STEP E-INTERFACE skipped (checkpoint found and reusable data cache is valid).")
+    else:
         if interface_rin_outputs_present(interface_outdir):
-            print("⏭️ STEP E-INTERFACE skipped (checkpoint found and outputs present).")
-        else:
             print("⚠️ chk_EINTERFACE.txt exists but interface outputs are missing; rerunning 3C_Interface_RIN.py.")
             dispatch_to_interface_rin()
-    else:
-        if args.headless:
-            dispatch_to_interface_rin()
         else:
-            resp = input(
-                f"Detected a ligandless multi-chain system with {INTERFACE_CHAIN_COUNT} chains. "
-                "Run protein-protein / protein-peptide interface RIN analysis? [Y/n]: "
-            ).strip().lower()
-            if resp in {"", "y", "yes"}:
+            if args.headless:
                 dispatch_to_interface_rin()
             else:
-                print("⏭️ STEP E-INTERFACE skipped by user choice.")
+                resp = input(
+                    f"Detected a ligandless multi-chain system with {INTERFACE_CHAIN_COUNT} chains. "
+                    "Run protein-protein / protein-peptide interface RIN analysis? [Y/n]: "
+                ).strip().lower()
+                if resp in {"", "y", "yes"}:
+                    dispatch_to_interface_rin()
+                else:
+                    print("⏭️ STEP E-INTERFACE skipped by user choice.")
 elif INTERFACE_RIN_MODE and args.skip_interface_rin:
     print("⏭️ STEP E-INTERFACE skipped due to --skip-interface-rin.")
 elif not PARTNER_MODE:
@@ -3844,7 +4143,7 @@ else:
     if not PARTNER_MODE:
         print("⏭️ STEP D6D skipped (protein-centric mode).")
 
-    elif not done_checkpoint("chk_D6D.txt"):
+    elif not _stage_cache_ready("D6D", "chk_D6D.txt", *_stage_d6d_outputs()):
         phase("STEP D6D — FULL SSE–Ligand Contact Coupling Analysis")
 
         ref, bb, ligand_atoms, lig_resname = get_traj_metadata()
@@ -4121,6 +4420,8 @@ else:
         print(f"📄 Time-series coupling table saved: {out_csv}")
 
         checkpoint("chk_D6D.txt")
+        _d6d_num, _d6d_plot, _d6d_params = _stage_d6d_outputs()
+        _record_stage_manifest("D6D", _d6d_num, _d6d_plot, _d6d_params)
         print("✅ STEP D6D complete.\n")
 
     else:

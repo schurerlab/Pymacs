@@ -594,6 +594,11 @@ class RunData:
     type_fraction: Optional[pd.DataFrame] = None
     residue_hover_summary: Optional[pd.DataFrame] = None
     residue_interaction_summary: Optional[pd.DataFrame] = None
+    analysis_manifest: Dict[str, Any] = field(default_factory=dict)
+    interface_manifest: Dict[str, Any] = field(default_factory=dict)
+    interface_chain_summary: Optional[pd.DataFrame] = None
+    interface_residue_pairs: Optional[pd.DataFrame] = None
+    interface_node_summary: Optional[pd.DataFrame] = None
     ligand_visual: LigandVisual = field(default_factory=LigandVisual)
     files: Dict[str, Optional[str]] = field(default_factory=dict)
     metrics: Dict[str, Any] = field(default_factory=dict)
@@ -633,6 +638,71 @@ def glob_many(base: Path, patterns: Sequence[str]) -> List[Path]:
             uniq.append(p)
             seen.add(rp)
     return uniq
+
+
+def load_json_if_exists(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def iter_manifest_output_paths(manifest: Dict[str, Any], base_dir: Path) -> List[Path]:
+    raw_records: List[Dict[str, Any]] = []
+    outputs = manifest.get("outputs")
+    if isinstance(outputs, dict):
+        for key in ("numerical", "plots"):
+            value = outputs.get(key)
+            if isinstance(value, list):
+                raw_records.extend([record for record in value if isinstance(record, dict)])
+    stages = manifest.get("stages")
+    if isinstance(stages, dict):
+        for stage in stages.values():
+            if not isinstance(stage, dict):
+                continue
+            for key in ("outputs", "plot_outputs"):
+                value = stage.get(key)
+                if isinstance(value, list):
+                    raw_records.extend([record for record in value if isinstance(record, dict)])
+
+    resolved: List[Path] = []
+    seen = set()
+    for record in raw_records:
+        raw_path = record.get("path")
+        if not raw_path:
+            continue
+        candidate = Path(str(raw_path))
+        if not candidate.is_absolute():
+            candidate = base_dir / candidate
+        try:
+            key = str(candidate.resolve())
+        except Exception:
+            key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append(candidate)
+    return resolved
+
+
+def manifest_preferred_path(manifest: Dict[str, Any], base_dir: Path, preferred_names: Sequence[str]) -> Optional[Path]:
+    preferred = {name for name in preferred_names}
+    for candidate in iter_manifest_output_paths(manifest, base_dir):
+        if candidate.name in preferred and candidate.exists():
+            return candidate
+    return None
+
+
+def maybe_read_csv(path: Optional[Path]) -> Optional[pd.DataFrame]:
+    if path is None or not path.exists():
+        return None
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return None
 
 
 def find_ligand_rmsd_path(analysis_dir: Path) -> Optional[Path]:
@@ -1325,15 +1395,20 @@ def render_ligand_svg(structure_path: Optional[Path]) -> LigandVisual:
 
 def load_one_run(run_dir: Path, use_framewise: bool = False, max_framewise_mb: float = 500.0, make_ligand_visual: bool = True, contact_hover_framewise: bool = False, max_hover_framewise_mb: float = 250.0) -> RunData:
     analysis_dir = run_dir / "Analysis_Results"
+    analysis_manifest_path = analysis_dir / "analysis_manifest.json"
+    analysis_manifest = load_json_if_exists(analysis_manifest_path)
+    interface_dir = analysis_dir / "Interface_RIN"
+    interface_manifest_path = interface_dir / "interface_analysis_manifest.json"
+    interface_manifest = load_json_if_exists(interface_manifest_path)
     name = run_dir.name
     family, state = infer_family_and_state(name)
     is_apo = "APO" in state.upper() or name.upper().endswith("_APO")
     info(f"Loading {name}...")
-    ligand_rmsd_path = find_ligand_rmsd_path(analysis_dir)
+    ligand_rmsd_path = manifest_preferred_path(analysis_manifest, analysis_dir, ["Ligand_RMSD.csv"]) or find_ligand_rmsd_path(analysis_dir)
     ligand_code = extract_ligand_code_from_filename(ligand_rmsd_path) or (None if is_apo else state)
-    protein_rmsd_path = first_existing(glob_many(analysis_dir, ["Protein_RMSD.csv", "protein_rmsd.csv", "rmsd_over_time.csv", "RMSD_over_time.csv", "Backbone_RMSD.csv", "GlobalProtein_RMSD.csv", "*Protein*RMSD*.csv", "*protein*rmsd*.csv"]))
-    rg_path = first_existing(glob_many(analysis_dir, ["Radius_of_Gyration_Protein_Ligand_Complex.csv", "Radius_of_Gyration_Protein.csv", "Radius_of_Gyration.csv", "Rg.csv", "*Gyration*.csv", "*gyration*.csv", "*Rg*.csv"]))
-    bound_complex_path = first_existing(glob_many(analysis_dir, ["*_BoundComplex_RMSD.csv", "*BoundComplex*RMSD*.csv", "*bound*complex*rmsd*.csv"]))
+    protein_rmsd_path = manifest_preferred_path(analysis_manifest, analysis_dir, ["Protein_RMSD.csv"]) or first_existing(glob_many(analysis_dir, ["Protein_RMSD.csv", "protein_rmsd.csv", "rmsd_over_time.csv", "RMSD_over_time.csv", "Backbone_RMSD.csv", "GlobalProtein_RMSD.csv", "*Protein*RMSD*.csv", "*protein*rmsd*.csv"]))
+    rg_path = manifest_preferred_path(analysis_manifest, analysis_dir, ["Radius_of_Gyration_Protein_Ligand_Complex.csv", "Radius_of_Gyration_Protein.csv"]) or first_existing(glob_many(analysis_dir, ["Radius_of_Gyration_Protein_Ligand_Complex.csv", "Radius_of_Gyration_Protein.csv", "Radius_of_Gyration.csv", "Rg.csv", "*Gyration*.csv", "*gyration*.csv", "*Rg*.csv"]))
+    bound_complex_path = manifest_preferred_path(analysis_manifest, analysis_dir, ["BoundComplex_RMSD.csv"]) or first_existing(glob_many(analysis_dir, ["*_BoundComplex_RMSD.csv", "*BoundComplex*RMSD*.csv", "*bound*complex*rmsd*.csv"]))
     ligand_rmsf_path = find_ligand_rmsf_path(analysis_dir, ligand_code)
     protein_rmsf_paths = find_protein_rmsf_paths(analysis_dir, ligand_code)
     residue_summary_path = find_residue_summary_path(analysis_dir)
@@ -1341,8 +1416,29 @@ def load_one_run(run_dir: Path, use_framewise: bool = False, max_framewise_mb: f
     framewise_path = find_framewise_interaction_path(analysis_dir)
     contact_framewise_path = find_contact_framewise_path(analysis_dir)
     interaction_types_framewise_path = find_interaction_types_framewise_path(analysis_dir)
-    run = RunData(name=name, run_dir=run_dir, analysis_dir=analysis_dir, family=family, state=state, is_apo=is_apo, ligand_code=ligand_code, ligand_display="APO" if is_apo else (ligand_code or state))
+    interface_chain_summary_path = manifest_preferred_path(interface_manifest, interface_dir, ["interface_chain_pair_summary.csv"])
+    if interface_chain_summary_path is None and (interface_dir / "interface_chain_pair_summary.csv").exists():
+        interface_chain_summary_path = interface_dir / "interface_chain_pair_summary.csv"
+    interface_residue_pairs_path = manifest_preferred_path(interface_manifest, interface_dir, ["interface_residue_pair_contacts.csv"])
+    if interface_residue_pairs_path is None and (interface_dir / "interface_residue_pair_contacts.csv").exists():
+        interface_residue_pairs_path = interface_dir / "interface_residue_pair_contacts.csv"
+    interface_node_summary_path = manifest_preferred_path(interface_manifest, interface_dir, ["interface_node_summary.csv"])
+    if interface_node_summary_path is None and (interface_dir / "interface_node_summary.csv").exists():
+        interface_node_summary_path = interface_dir / "interface_node_summary.csv"
+    run = RunData(
+        name=name,
+        run_dir=run_dir,
+        analysis_dir=analysis_dir,
+        family=family,
+        state=state,
+        is_apo=is_apo,
+        ligand_code=ligand_code,
+        ligand_display="APO" if is_apo else (ligand_code or state),
+        analysis_manifest=analysis_manifest,
+        interface_manifest=interface_manifest,
+    )
     run.files = {
+        "analysis_manifest_json": str(analysis_manifest_path) if analysis_manifest else None,
         "protein_rmsd_csv": str(protein_rmsd_path) if protein_rmsd_path else None,
         "protein_rmsf_csvs": ";".join(str(p) for p in protein_rmsf_paths) if protein_rmsf_paths else None,
         "radius_gyration_csv": str(rg_path) if rg_path else None,
@@ -1354,6 +1450,10 @@ def load_one_run(run_dir: Path, use_framewise: bool = False, max_framewise_mb: f
         "framewise_interaction_csv_skipped_by_default": str(framewise_path) if framewise_path else None,
         "contact_hover_framewise_csv": str(contact_framewise_path) if contact_framewise_path else None,
         "interaction_type_framewise_csv": str(interaction_types_framewise_path) if interaction_types_framewise_path else None,
+        "interface_manifest_json": str(interface_manifest_path) if interface_manifest else None,
+        "interface_chain_pair_summary_csv": str(interface_chain_summary_path) if interface_chain_summary_path else None,
+        "interface_residue_pair_contacts_csv": str(interface_residue_pairs_path) if interface_residue_pairs_path else None,
+        "interface_node_summary_csv": str(interface_node_summary_path) if interface_node_summary_path else None,
     }
     if make_ligand_visual and not run.is_apo:
         ligand_structure_file = find_ligand_structure_file(run)
@@ -1372,6 +1472,9 @@ def load_one_run(run_dir: Path, use_framewise: bool = False, max_framewise_mb: f
     run.type_fraction = load_type_summary(type_summary_path)
     run.residue_hover_summary = None
     run.residue_interaction_summary = None
+    run.interface_chain_summary = maybe_read_csv(interface_chain_summary_path)
+    run.interface_residue_pairs = maybe_read_csv(interface_residue_pairs_path)
+    run.interface_node_summary = maybe_read_csv(interface_node_summary_path)
     if contact_hover_framewise:
         run.residue_hover_summary = load_residue_hover_summary_from_framewise(contact_framewise_path, max_mb=max_hover_framewise_mb)
     if run.residue_hover_summary is None and run.residue_frequency is not None:
@@ -1396,6 +1499,48 @@ def load_one_run(run_dir: Path, use_framewise: bool = False, max_framewise_mb: f
 
 
 def build_basic_metrics(run: RunData, interaction_meta: Dict[str, Any]) -> Dict[str, Any]:
+    interface_metrics: Dict[str, Any] = {}
+    if run.interface_chain_summary is not None and not run.interface_chain_summary.empty:
+        top_chain_row = run.interface_chain_summary.sort_values(
+            by=["ContactFraction", "MeanContactsPerFrame"],
+            ascending=[False, False],
+            kind="stable",
+        ).iloc[0]
+        interface_metrics.update(
+            {
+                "interface_chain_pair": f"{top_chain_row.get('ChainA_Label', '')}:{top_chain_row.get('ChainB_Label', '')}",
+                "interface_contact_fraction": pd.to_numeric(pd.Series([top_chain_row.get("ContactFraction")]), errors="coerce").iloc[0],
+                "interface_mean_contacts_per_frame": pd.to_numeric(pd.Series([top_chain_row.get("MeanContactsPerFrame")]), errors="coerce").iloc[0],
+                "interface_max_contacts_in_frame": pd.to_numeric(pd.Series([top_chain_row.get("MaxContactsInFrame")]), errors="coerce").iloc[0],
+                "interface_mean_min_distance_A": pd.to_numeric(pd.Series([top_chain_row.get("MeanMinDistance_A")]), errors="coerce").iloc[0],
+                "interface_min_observed_distance_A": pd.to_numeric(pd.Series([top_chain_row.get("MinObservedDistance_A")]), errors="coerce").iloc[0],
+                "interface_chain_pair_count": int(len(run.interface_chain_summary)),
+            }
+        )
+    if run.interface_residue_pairs is not None and not run.interface_residue_pairs.empty:
+        top_pair_row = run.interface_residue_pairs.sort_values(
+            by=["ContactFraction", "ContactFrames"],
+            ascending=[False, False],
+            kind="stable",
+        ).iloc[0]
+        interface_metrics.update(
+            {
+                "interface_top_residue_pair": f"{top_pair_row.get('ResidueA', '')} -- {top_pair_row.get('ResidueB', '')}",
+                "interface_top_residue_pair_contact_fraction": pd.to_numeric(pd.Series([top_pair_row.get("ContactFraction")]), errors="coerce").iloc[0],
+            }
+        )
+    if run.interface_node_summary is not None and not run.interface_node_summary.empty:
+        top_node_row = run.interface_node_summary.sort_values(
+            by=["WeightedDegree", "Degree"],
+            ascending=[False, False],
+            kind="stable",
+        ).iloc[0]
+        interface_metrics.update(
+            {
+                "interface_top_weighted_degree_residue": top_node_row.get("Residue_Label"),
+                "interface_top_weighted_degree": pd.to_numeric(pd.Series([top_node_row.get("WeightedDegree")]), errors="coerce").iloc[0],
+            }
+        )
     pr, rg, lr, bc = run.protein_rmsd, run.radius_gyration, run.ligand_rmsd, run.bound_complex_rmsd
     metrics = {
         "family": run.family, "state": run.state, "is_apo": run.is_apo, "ligand_display": run.ligand_display,
@@ -1422,7 +1567,9 @@ def build_basic_metrics(run: RunData, interaction_meta: Dict[str, Any]) -> Dict[
         "has_ligand_rmsd": lr is not None, "has_ligand_rmsf": run.ligand_rmsf is not None,
         "has_residue_contacts": run.residue_frequency is not None, "has_interaction_types": run.type_fraction is not None,
         "has_ligand_visual": run.ligand_visual.svg is not None,
+        "has_interface_summary": run.interface_chain_summary is not None and not run.interface_chain_summary.empty,
     }
+    metrics.update(interface_metrics)
     metrics.update(interaction_meta)
     return metrics
 
@@ -1917,6 +2064,17 @@ def build_cross_species_components(runs: List[RunData], top_residues: int = 40, 
             "available_ligand_rmsd": bool(run.ligand_rmsd is not None and not run.ligand_rmsd.empty),
             "available_ligand_rmsf": bool(run.ligand_rmsf is not None and not run.ligand_rmsf.empty),
             "available_contacts": bool(run.residue_frequency is not None and not run.residue_frequency.empty),
+            "available_interface": bool(run.metrics.get("has_interface_summary")),
+            "interface_chain_pair": run.metrics.get("interface_chain_pair"),
+            "interface_contact_fraction": run.metrics.get("interface_contact_fraction"),
+            "interface_mean_contacts_per_frame": run.metrics.get("interface_mean_contacts_per_frame"),
+            "interface_max_contacts_in_frame": run.metrics.get("interface_max_contacts_in_frame"),
+            "interface_mean_min_distance_A": run.metrics.get("interface_mean_min_distance_A"),
+            "interface_min_observed_distance_A": run.metrics.get("interface_min_observed_distance_A"),
+            "interface_top_residue_pair": run.metrics.get("interface_top_residue_pair"),
+            "interface_top_residue_pair_contact_fraction": run.metrics.get("interface_top_residue_pair_contact_fraction"),
+            "interface_top_weighted_degree_residue": run.metrics.get("interface_top_weighted_degree_residue"),
+            "interface_top_weighted_degree": run.metrics.get("interface_top_weighted_degree"),
             "used_framewise": bool(run.metrics.get("used_framewise")),
             "framewise_file_size_mb": run.metrics.get("framewise_file_size_mb"),
         })

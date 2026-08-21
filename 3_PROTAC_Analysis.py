@@ -28,6 +28,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from pymacs_component_utils import load_component_registry
+from pymacs_analysis_cache import record_stage_completion
 
 PLOTTING_IMPORT_ERROR = None
 try:
@@ -3866,6 +3867,61 @@ def write_empty_manifest(registry: FigureRegistry) -> Tuple[Path, Path]:
     return registry.write()
 
 
+def write_analysis_manifest(args, outdir: Path) -> None:
+    numerical_outputs = sorted(
+        [
+            path
+            for path in outdir.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".csv", ".json", ".txt", ".npz", ".gz"}
+            and path.name != "analysis_manifest.json"
+        ]
+    )
+    plot_outputs = sorted(
+        [
+            path
+            for path in outdir.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".png", ".pdf", ".svg"}
+        ]
+    )
+    record_stage_completion(
+        outdir / "analysis_manifest.json",
+        stage_name="PROTAC_ANALYSIS",
+        analysis_script=Path(__file__).name,
+        analysis_source_path=__file__,
+        input_files={
+            "topology": args.topo,
+            "trajectory": args.traj,
+            "atomindex": args.atomindex,
+        },
+        data_parameters={
+            "distance_cutoff_A": float(args.distance_cutoff),
+            "frame_start": args.start_frame,
+            "frame_end": args.end_frame,
+            "frame_step": int(args.frame_step),
+            "skip_preprocess": bool(args.skip_preprocess),
+            "skip_rmsf": bool(args.skip_rmsf),
+            "skip_pca": bool(args.skip_pca),
+            "analyze_water_bridges": bool(args.analyze_water_bridges),
+            "water_bridge_cutoff_A": float(args.water_bridge_cutoff),
+            "water_pocket_cutoff_A": float(args.water_pocket_cutoff),
+        },
+        plot_parameters={
+            "network_min_contact_fraction": float(args.network_min_contact_fraction),
+            "network_max_residues": int(args.network_max_residues),
+            "contact_map_min_contact_fraction": float(args.contact_map_min_contact_fraction),
+            "contact_map_max_residues": int(args.contact_map_max_residues),
+            "plot_allprotein": bool(args.plot_allprotein),
+            "rmsf_contact_threshold": float(args.rmsf_contact_threshold),
+            "rmsf_label_top_contacts": int(args.rmsf_label_top_contacts),
+            "rmsf_contact_marker_mode": args.rmsf_contact_marker_mode,
+        },
+        outputs=numerical_outputs,
+        plot_outputs=plot_outputs,
+        system="protac",
+        mode="protac",
+    )
+
+
 def main() -> int:
     args = parse_args()
     args.pdb_reference = args.pdb_reference or default_pdb_reference()
@@ -4186,6 +4242,7 @@ def main() -> int:
 
     execute_stage(runtime_profiler, "Write figure manifest", figure_registry.write)
     execute_stage(runtime_profiler, "Write runtime profile", runtime_profiler.write)
+    write_analysis_manifest(args, outdir)
     log(f"Analysis complete. Outputs written under {outdir}")
     return 0
 

@@ -10,22 +10,45 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
+from typing import Any, Dict, Optional, Sequence
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.cbook as mpl_cbook
-import networkx as nx
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import MDAnalysis as mda
-from MDAnalysis.lib.distances import capped_distance, distance_array
+
+from pymacs_analysis_cache import (
+    compute_signature,
+    describe_output_files,
+    fingerprint_files,
+    load_npz_dict,
+    read_json_manifest,
+    record_stage_completion,
+    save_npz_atomic,
+    validate_stage_cache,
+    write_json_atomic,
+)
 
 try:
     from tqdm import tqdm
 except Exception:  # pragma: no cover
     tqdm = None
+
+try:
+    import networkx as nx
+except Exception:  # pragma: no cover
+    nx = None
+
+try:
+    import MDAnalysis as mda
+    from MDAnalysis.lib.distances import capped_distance, distance_array
+except Exception:  # pragma: no cover
+    mda = None
+    capped_distance = None
+    distance_array = None
 
 
 if not hasattr(mpl_cbook, "iterable"):
@@ -61,6 +84,7 @@ def build_parser():
     parser.add_argument("--frame-step", type=int, default=1)
     parser.add_argument("--max-edges", type=int, default=100)
     parser.add_argument("--chain-pairs", default=None)
+    parser.add_argument("--force-recompute", action="store_true")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -284,6 +308,145 @@ def iter_frame_indices(n_frames, frame_step):
     return list(range(0, n_frames, max(1, int(frame_step))))
 
 
+def interface_numerical_output_paths(outdir: Path) -> list[Path]:
+    return [
+        outdir / "interface_chain_pair_summary.csv",
+        outdir / "interface_contact_timeseries.csv",
+        outdir / "interface_residue_pair_contacts.csv",
+        outdir / "interface_node_summary.csv",
+        outdir / "interface_frame_index.csv",
+        outdir / "interface_residue_pair_framewise.csv.gz",
+        outdir / "interface_residue_pair_presence.npz",
+    ]
+
+
+def interface_plot_output_paths(outdir: Path) -> list[Path]:
+    return [
+        outdir / "Interface_ChainPair_ContactFractions.png",
+        outdir / "Interface_ContactCount_Timeseries.png",
+        outdir / "Interface_MinDistance_Timeseries.png",
+        outdir / "Interface_ResiduePair_ContactHeatmap.png",
+        outdir / "Interface_RIN_Network.png",
+        outdir / "Interface_ChainLevel_Network.png",
+        outdir / "Interface_TopResiduePairs_Barplot.png",
+    ]
+
+
+def build_interface_frame_index(frame_indices: Sequence[int], analyzed_times_ns: Sequence[float]) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Frame": list(frame_indices),
+            "Time_ns": [float(value) for value in analyzed_times_ns],
+        }
+    )
+
+
+def make_pair_id(chain_a_label, chain_b_label, residue_a_label, residue_b_label) -> str:
+    return f"{chain_a_label}__{chain_b_label}__{residue_a_label}__{residue_b_label}"
+
+
+def build_presence_payload(
+    residue_df: pd.DataFrame,
+    pair_binary_series: Dict[str, Sequence[int]],
+    frame_indices: Sequence[int],
+    analyzed_times_ns: Sequence[float],
+) -> Dict[str, np.ndarray]:
+    frames = len(frame_indices)
+    rows = []
+    pair_ids = []
+    chain_a_labels = []
+    chain_b_labels = []
+    residue_a_labels = []
+    residue_b_labels = []
+
+    for _, row in residue_df.iterrows():
+        series_key = str(row.get("_series_key", ""))
+        binary_series = np.asarray(pair_binary_series.get(series_key, [0] * frames), dtype=np.uint8)
+        if binary_series.shape[0] != frames:
+            raise ValueError(
+                f"Residue-pair series length mismatch for {series_key}: "
+                f"{binary_series.shape[0]} vs expected {frames}"
+            )
+        rows.append(binary_series)
+        pair_ids.append(str(row["Pair_ID"]))
+        chain_a_labels.append(str(row["ChainA_Label"]))
+        chain_b_labels.append(str(row["ChainB_Label"]))
+        residue_a_labels.append(str(row["ResidueA"]))
+        residue_b_labels.append(str(row["ResidueB"]))
+
+    contact_matrix = np.vstack(rows).astype(np.uint8, copy=False) if rows else np.zeros((0, frames), dtype=np.uint8)
+    return {
+        "contact_matrix": contact_matrix,
+        "frame_indices": np.asarray(frame_indices, dtype=np.int64),
+        "times_ns": np.asarray(analyzed_times_ns, dtype=np.float64),
+        "pair_ids": np.asarray(pair_ids),
+        "chain_a_labels": np.asarray(chain_a_labels),
+        "chain_b_labels": np.asarray(chain_b_labels),
+        "residue_a_labels": np.asarray(residue_a_labels),
+        "residue_b_labels": np.asarray(residue_b_labels),
+    }
+
+
+def current_data_signature(input_files: Dict[str, str], data_parameters: Dict[str, Any]) -> str:
+    return compute_signature(
+        {
+            "inputs": fingerprint_files(input_files),
+            "parameters": data_parameters,
+        }
+    )
+
+
+def interface_plot_parameters(args) -> Dict[str, Any]:
+    return {
+        "min_contact_frac": float(args.min_contact_frac),
+        "max_edges": int(args.max_edges),
+    }
+
+
+def load_cached_interface_outputs(outdir: Path) -> Dict[str, Any]:
+    residue_df = pd.read_csv(outdir / "interface_residue_pair_contacts.csv")
+    if "Pair_ID" not in residue_df.columns:
+        residue_df["Pair_ID"] = [
+            make_pair_id(
+                row["ChainA_Label"],
+                row["ChainB_Label"],
+                row["ResidueA"],
+                row["ResidueB"],
+            )
+            for _, row in residue_df.iterrows()
+        ]
+    return {
+        "summary_df": pd.read_csv(outdir / "interface_chain_pair_summary.csv"),
+        "timeseries_df": pd.read_csv(outdir / "interface_contact_timeseries.csv"),
+        "residue_df": residue_df,
+        "node_df": pd.read_csv(outdir / "interface_node_summary.csv"),
+        "frame_index_df": pd.read_csv(outdir / "interface_frame_index.csv"),
+        "presence_payload": load_npz_dict(outdir / "interface_residue_pair_presence.npz"),
+    }
+
+
+def write_interface_outputs(
+    outdir: Path,
+    summary_df: pd.DataFrame,
+    timeseries_df: pd.DataFrame,
+    residue_df: pd.DataFrame,
+    node_df: pd.DataFrame,
+    frame_index_df: pd.DataFrame,
+    framewise_df: pd.DataFrame,
+    presence_payload: Dict[str, np.ndarray],
+    runtime_lines: Sequence[str],
+) -> None:
+    summary_df.to_csv(outdir / "interface_chain_pair_summary.csv", index=False)
+    timeseries_df.to_csv(outdir / "interface_contact_timeseries.csv", index=False)
+    residue_export_df = residue_df.drop(columns=["_pair_key", "_pair_id", "_series_key"], errors="ignore")
+    residue_export_df.to_csv(outdir / "interface_residue_pair_contacts.csv", index=False)
+    node_df.to_csv(outdir / "interface_node_summary.csv", index=False)
+    frame_index_df.to_csv(outdir / "interface_frame_index.csv", index=False)
+    framewise_df.to_csv(outdir / "interface_residue_pair_framewise.csv.gz", index=False, compression="gzip")
+    save_npz_atomic(outdir / "interface_residue_pair_presence.npz", **presence_payload)
+    (outdir / "interface_runtime_summary.txt").write_text("\n".join(runtime_lines) + "\n")
+
+
 def analyze_chain_pair_contacts(universe, left_entry, right_entry, frame_indices, cutoff_ang):
     left = build_chain_data(universe, left_entry)
     right = build_chain_data(universe, right_entry)
@@ -297,6 +460,7 @@ def analyze_chain_pair_contacts(universe, left_entry, right_entry, frame_indices
     residue_pair_stats = {}
     residue_pair_series = defaultdict(list)
     time_rows = []
+    framewise_rows = []
     analyzed_times_ns = []
 
     iterator = frame_indices
@@ -344,6 +508,31 @@ def analyze_chain_pair_contacts(universe, left_entry, right_entry, frame_indices
             stats["contact_frames"] += 1
             stats["distance_sum"] += dist
             stats["min_distance"] = min(stats["min_distance"], dist)
+            res_left = left["residues"][pair_key[0]]
+            res_right = right["residues"][pair_key[1]]
+            pair_id_value = make_pair_id(
+                left_entry["display_label"],
+                right_entry["display_label"],
+                res_left["label"],
+                res_right["label"],
+            )
+            framewise_rows.append(
+                {
+                    "Pair_ID": pair_id_value,
+                    "Frame": int(frame_index),
+                    "Time_ns": float(universe.trajectory.time) / 1000.0,
+                    "ChainA_Label": left_entry["display_label"],
+                    "ChainB_Label": right_entry["display_label"],
+                    "ResidueA": res_left["label"],
+                    "ResidueB": res_right["label"],
+                    "ResidueA_Name": res_left["resname"],
+                    "ResidueB_Name": res_right["resname"],
+                    "ResidueA_Index": res_left["resnum"],
+                    "ResidueB_Index": res_right["resnum"],
+                    "MinDistance_A": float(dist),
+                    "InteractionClass": classify_residue_pair(res_left["resname"], res_right["resname"]),
+                }
+            )
 
         for pair_key in residue_pair_stats:
             residue_pair_series[pair_key].append(1 if pair_key in frame_pair_min else 0)
@@ -366,8 +555,15 @@ def analyze_chain_pair_contacts(universe, left_entry, right_entry, frame_indices
     for pair_key, stats in residue_pair_stats.items():
         res_left = left["residues"][pair_key[0]]
         res_right = right["residues"][pair_key[1]]
+        pair_id_value = make_pair_id(
+            left_entry["display_label"],
+            right_entry["display_label"],
+            res_left["label"],
+            res_right["label"],
+        )
         residue_rows.append(
             {
+                "Pair_ID": pair_id_value,
                 "ChainA_Label": left_entry["display_label"],
                 "ChainB_Label": right_entry["display_label"],
                 "ResidueA": res_left["label"],
@@ -411,6 +607,7 @@ def analyze_chain_pair_contacts(universe, left_entry, right_entry, frame_indices
         "summary_row": summary_row,
         "time_rows": time_rows,
         "residue_rows": residue_rows,
+        "framewise_rows": framewise_rows,
         "pair_binary_series": residue_pair_series,
         "times_ns": analyzed_times_ns,
     }
@@ -463,15 +660,6 @@ def build_node_summary(residue_df):
             }
         )
     return pd.DataFrame(rows).sort_values(["WeightedDegree", "Degree"], ascending=[False, False])
-
-
-def write_csv_outputs(outdir, summary_df, timeseries_df, residue_df, node_df, runtime_lines):
-    summary_df.to_csv(outdir / "interface_chain_pair_summary.csv", index=False)
-    timeseries_df.to_csv(outdir / "interface_contact_timeseries.csv", index=False)
-    residue_export_df = residue_df.drop(columns=["_pair_key", "_pair_id", "_series_key"], errors="ignore")
-    residue_export_df.to_csv(outdir / "interface_residue_pair_contacts.csv", index=False)
-    node_df.to_csv(outdir / "interface_node_summary.csv", index=False)
-    (outdir / "interface_runtime_summary.txt").write_text("\n".join(runtime_lines) + "\n")
 
 
 def plot_placeholder(path, title, message):
@@ -544,7 +732,7 @@ def plot_min_distance_timeseries(timeseries_df, outdir, cutoff_ang):
     plt.close()
 
 
-def plot_residue_pair_heatmap(residue_df, pair_binary_series, analyzed_times_ns, outdir):
+def plot_residue_pair_heatmap(residue_df, presence_payload, outdir):
     path = outdir / "Interface_ResiduePair_ContactHeatmap.png"
     if residue_df.empty:
         plot_placeholder(
@@ -554,6 +742,11 @@ def plot_residue_pair_heatmap(residue_df, pair_binary_series, analyzed_times_ns,
         )
         return
 
+    contact_matrix = np.asarray(presence_payload.get("contact_matrix", np.zeros((0, 0), dtype=np.uint8)), dtype=np.uint8)
+    analyzed_times_ns = np.asarray(presence_payload.get("times_ns", np.array([], dtype=float)), dtype=float)
+    pair_ids = [str(value) for value in np.asarray(presence_payload.get("pair_ids", np.array([], dtype=str)))]
+    pair_id_to_index = {pair_id: index for index, pair_id in enumerate(pair_ids)}
+
     top_df = residue_df.sort_values(
         ["ContactFraction", "ContactFrames"],
         ascending=[False, False]
@@ -561,13 +754,14 @@ def plot_residue_pair_heatmap(residue_df, pair_binary_series, analyzed_times_ns,
     rows = []
     row_labels = []
     for _, row in top_df.iterrows():
-        series = pair_binary_series.get(row["_series_key"])
-        if series is None:
+        pair_id = str(row.get("Pair_ID", ""))
+        row_index = pair_id_to_index.get(pair_id)
+        if row_index is None or row_index >= contact_matrix.shape[0]:
             continue
         row_labels.append(
             f"{row['ResidueA']} -- {row['ResidueB']}"
         )
-        rows.append(series)
+        rows.append(contact_matrix[row_index])
 
     if not rows:
         plot_placeholder(
@@ -625,6 +819,9 @@ def plot_residue_pair_heatmap(residue_df, pair_binary_series, analyzed_times_ns,
 
 def plot_residue_network(residue_df, outdir, min_contact_frac, max_edges):
     path = outdir / "Interface_RIN_Network.png"
+    if nx is None:
+        plot_placeholder(path, "Interface Residue Interaction Network", "NetworkX is unavailable in this environment.")
+        return
     filtered = residue_df[residue_df["ContactFraction"] >= float(min_contact_frac)].copy()
     filtered = filtered.sort_values(["ContactFraction", "ContactFrames"], ascending=[False, False]).head(int(max_edges))
 
@@ -670,6 +867,9 @@ def plot_residue_network(residue_df, outdir, min_contact_frac, max_edges):
 
 def plot_chain_network(summary_df, outdir):
     path = outdir / "Interface_ChainLevel_Network.png"
+    if nx is None:
+        plot_placeholder(path, "Interface Chain-Level Network", "NetworkX is unavailable in this environment.")
+        return
     if summary_df.empty:
         plot_placeholder(path, "Interface Chain-Level Network", "No chain-pair summary data were generated.")
         return
@@ -722,11 +922,93 @@ def plot_top_residue_pairs_barplot(residue_df, outdir):
     plt.close()
 
 
+def write_interface_manifest(
+    manifest_path: Path,
+    args,
+    input_files: Dict[str, str],
+    chain_pairs,
+    polymer_entries,
+    total_frames: int,
+    frame_indices: Sequence[int],
+    numerical_outputs: Sequence[Path],
+    plot_outputs: Sequence[Path],
+    data_parameters: Dict[str, Any],
+    plot_parameters: Dict[str, Any],
+    *,
+    legacy_adopted: bool = False,
+) -> Dict[str, Any]:
+    chain_metadata = []
+    selected_labels = {
+        left["display_label"]: left for left, _ in chain_pairs
+    }
+    selected_labels.update({right["display_label"]: right for _, right in chain_pairs})
+
+    for entry in polymer_entries:
+        if entry["display_label"] not in selected_labels:
+            continue
+        chain_metadata.append(
+            {
+                "display_label": entry["display_label"],
+                "chain_type": entry.get("chain_type"),
+                "label": entry.get("label"),
+                "current_chain": entry.get("current_chain"),
+                "source_chain": entry.get("source_chain"),
+                "atom_range_1based": [int(entry["start"]) + 1, int(entry["end"]) + 1],
+            }
+        )
+
+    manifest = record_stage_completion(
+        manifest_path,
+        stage_name="INTERFACE_RIN",
+        analysis_script=Path(__file__).name,
+        analysis_source_path=__file__,
+        input_files=input_files,
+        data_parameters=data_parameters,
+        plot_parameters=plot_parameters,
+        outputs=numerical_outputs,
+        plot_outputs=plot_outputs,
+        system="interface_rin",
+        mode="protein_interface",
+        legacy_adopted=legacy_adopted,
+        extra_stage_fields={
+            "total_trajectory_frames": int(total_frames),
+            "analyzed_frame_count": int(len(frame_indices)),
+            "selected_chain_pairs": [
+                f"{left['display_label']}:{right['display_label']}" for left, right in chain_pairs
+            ],
+            "chain_metadata": chain_metadata,
+        },
+    )
+    manifest["topology_fingerprint"] = manifest["input_fingerprints"].get("topology")
+    manifest["trajectory_fingerprint"] = manifest["input_fingerprints"].get("trajectory")
+    manifest["atomindex_fingerprint"] = manifest["input_fingerprints"].get("atomindex")
+    manifest["total_trajectory_frames"] = int(total_frames)
+    manifest["analyzed_frame_count"] = int(len(frame_indices))
+    manifest["frame_step"] = int(args.frame_step)
+    manifest["contact_cutoff_A"] = float(args.contact_cutoff)
+    manifest["selected_chain_pairs"] = [
+        f"{left['display_label']}:{right['display_label']}" for left, right in chain_pairs
+    ]
+    manifest["chain_metadata"] = chain_metadata
+    manifest["numerical_output_files"] = describe_output_files(numerical_outputs, base_dir=manifest_path.parent)
+    manifest["plot_output_files"] = describe_output_files(plot_outputs, base_dir=manifest_path.parent)
+    write_json_atomic(manifest_path, manifest)
+    return manifest
+
+
 def main():
     start_time = time.perf_counter()
     args = build_parser().parse_args()
+    if mda is None or capped_distance is None or distance_array is None:
+        raise SystemExit(
+            "MDAnalysis is required to run interface analysis. "
+            "Install the MDAnalysis environment before executing 3C_Interface_RIN.py."
+        )
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+    manifest_path = outdir / "interface_analysis_manifest.json"
+    numerical_outputs = interface_numerical_output_paths(outdir)
+    plot_outputs = interface_plot_output_paths(outdir)
 
     stage_times = {}
 
@@ -770,10 +1052,145 @@ def main():
         print("🧪 Dry run requested; exiting before trajectory analysis.")
         return 0
 
+    input_files = {
+        "topology": str(Path(args.topo).resolve()),
+        "trajectory": str(Path(args.traj).resolve()),
+        "atomindex": str(Path(args.atomindex).resolve()),
+    }
+    data_parameters = {
+        "contact_cutoff_A": float(args.contact_cutoff),
+        "frame_step": int(args.frame_step),
+        "selected_chain_pairs": [
+            f"{left['display_label']}:{right['display_label']}" for left, right in chain_pairs
+        ],
+        "total_trajectory_frames": int(len(universe.trajectory)),
+        "analyzed_frame_count": int(len(frame_indices)),
+        "chain_metadata": [
+            {
+                "display_label": entry["display_label"],
+                "chain_type": entry.get("chain_type"),
+                "atom_range_1based": [int(entry["start"]) + 1, int(entry["end"]) + 1],
+            }
+            for entry in polymer_entries
+        ],
+    }
+    plot_parameters = interface_plot_parameters(args)
+    data_signature = current_data_signature(input_files, data_parameters)
+
+    cache_status = validate_stage_cache(
+        manifest_path=manifest_path,
+        stage_name="INTERFACE_RIN",
+        required_outputs=numerical_outputs,
+        current_data_signature=data_signature,
+    )
+    legacy_outputs_present = all(
+        (outdir / name).exists()
+        for name in [
+            "interface_chain_pair_summary.csv",
+            "interface_contact_timeseries.csv",
+            "interface_residue_pair_contacts.csv",
+            "interface_node_summary.csv",
+        ]
+    )
+
+    if args.force_recompute:
+        print("🔄 --force-recompute requested; ignoring any existing cache.")
+    elif cache_status["reusable"]:
+        cached = load_cached_interface_outputs(outdir)
+        stage_record = cache_status.get("stage_record") or {}
+        cached_plot_parameters = ((stage_record.get("parameters") or {}).get("plot_only") or {})
+        plots_ready = all(path.exists() and path.stat().st_size > 0 for path in plot_outputs)
+
+        if cache_status["legacy_adopt"]:
+            print("♻️ Existing interface dataset found without a registered manifest.")
+            print("📝 Adopting legacy interface outputs into interface_analysis_manifest.json.")
+            write_interface_manifest(
+                manifest_path,
+                args,
+                input_files,
+                chain_pairs,
+                polymer_entries,
+                len(universe.trajectory),
+                frame_indices,
+                numerical_outputs,
+                plot_outputs,
+                data_parameters,
+                plot_parameters,
+                legacy_adopted=True,
+            )
+            cached_plot_parameters = plot_parameters
+
+        if cached_plot_parameters == plot_parameters and plots_ready:
+            print("✅ Existing interface dataset found")
+            print("✅ Input trajectory/topology compatible")
+            print("♻️ Reusing cached interface data")
+            print("✅ Interface plots already present; no trajectory rescan needed.")
+            return 0
+
+        print("✅ Existing interface dataset found")
+        print("✅ Input trajectory/topology compatible")
+        print("♻️ Reusing cached interface data")
+        if cached_plot_parameters != plot_parameters:
+            print("🎨 Plot-only parameters changed; regenerating interface figures from cached data.")
+        else:
+            print("🎨 One or more interface figures are missing; regenerating figures from cached data.")
+
+        t0 = time.perf_counter()
+        plot_chain_pair_heatmap(cached["summary_df"], outdir)
+        plot_contact_timeseries(cached["timeseries_df"], outdir)
+        plot_min_distance_timeseries(cached["timeseries_df"], outdir, args.contact_cutoff)
+        plot_residue_pair_heatmap(cached["residue_df"], cached["presence_payload"], outdir)
+        plot_residue_network(cached["residue_df"], outdir, args.min_contact_frac, args.max_edges)
+        plot_chain_network(cached["summary_df"], outdir)
+        plot_top_residue_pairs_barplot(cached["residue_df"], outdir)
+        stage_times["plotting_s"] = time.perf_counter() - t0
+
+        runtime_lines = [
+            f"input_topology={Path(args.topo).resolve()}",
+            f"input_trajectory={Path(args.traj).resolve()}",
+            f"atomindex_file={Path(args.atomindex).resolve()}",
+            f"frames_total={len(universe.trajectory)}",
+            f"frames_analyzed={len(frame_indices)}",
+            f"frame_step={args.frame_step}",
+            f"contact_cutoff_A={args.contact_cutoff}",
+            f"min_contact_frac={args.min_contact_frac}",
+            "chain_pairs_analyzed=" + ",".join(
+                f"{left['display_label']}:{right['display_label']}" for left, right in chain_pairs
+            ),
+            f"plotting_s={stage_times['plotting_s']:.3f}",
+            f"total_runtime_s={time.perf_counter() - start_time:.3f}",
+        ]
+        (outdir / "interface_runtime_summary.txt").write_text("\n".join(runtime_lines) + "\n")
+        write_interface_manifest(
+            manifest_path,
+            args,
+            input_files,
+            chain_pairs,
+            polymer_entries,
+            len(universe.trajectory),
+            frame_indices,
+            numerical_outputs,
+            plot_outputs,
+            data_parameters,
+            plot_parameters,
+            legacy_adopted=bool(cache_status["legacy_adopt"]),
+        )
+        return 0
+    else:
+        if legacy_outputs_present:
+            print("⚠️ Legacy interface cache is incomplete for the current schema.")
+            print("🔄 Backfilling interface temporal dataset.")
+        elif cache_status["reason"] == "data_signature_mismatch":
+            print("⚠️ Existing interface cache is incompatible with current data-affecting inputs.")
+            print("🔄 Recomputing interface contact dataset.")
+        else:
+            print("🔄 No reusable interface cache found; running trajectory contact scan.")
+
     t0 = time.perf_counter()
     summary_rows = []
     timeseries_rows = []
     residue_rows = []
+    framewise_rows = []
     pair_binary_series = {}
     analyzed_times_ns = None
 
@@ -785,11 +1202,14 @@ def main():
         summary_rows.append(result["summary_row"])
         timeseries_rows.extend(result["time_rows"])
         residue_rows.extend(result["residue_rows"])
+        framewise_rows.extend(result["framewise_rows"])
         for pair_key, binary_series in result["pair_binary_series"].items():
             pair_binary_series[f"{result['summary_row']['ChainA_Label']}__{result['summary_row']['ChainB_Label']}::{pair_key[0]}::{pair_key[1]}"] = binary_series
         if analyzed_times_ns is None:
             analyzed_times_ns = result["times_ns"]
     stage_times["analyze_contacts_s"] = time.perf_counter() - t0
+    analyzed_times_ns = analyzed_times_ns or [float(universe.trajectory[index].time) / 1000.0 for index in frame_indices]
+    frame_index_df = build_interface_frame_index(frame_indices, analyzed_times_ns)
 
     summary_columns = [
         "ChainA_Label",
@@ -823,6 +1243,7 @@ def main():
         timeseries_df = timeseries_df.sort_values(["ChainA_Label", "ChainB_Label", "Frame"])
 
     residue_columns = [
+        "Pair_ID",
         "ChainA_Label",
         "ChainB_Label",
         "ResidueA",
@@ -846,6 +1267,25 @@ def main():
         residue_df = residue_df.sort_values(["ContactFraction", "ContactFrames"], ascending=[False, False])
 
     node_df = build_node_summary(residue_df)
+    framewise_columns = [
+        "Pair_ID",
+        "Frame",
+        "Time_ns",
+        "ChainA_Label",
+        "ChainB_Label",
+        "ResidueA",
+        "ResidueB",
+        "ResidueA_Name",
+        "ResidueB_Name",
+        "ResidueA_Index",
+        "ResidueB_Index",
+        "MinDistance_A",
+        "InteractionClass",
+    ]
+    framewise_df = pd.DataFrame(framewise_rows, columns=framewise_columns)
+    if not framewise_df.empty:
+        framewise_df = framewise_df.sort_values(["Frame", "ChainA_Label", "ChainB_Label", "ResidueA_Index", "ResidueB_Index"])
+    presence_payload = build_presence_payload(residue_df, pair_binary_series, frame_indices, analyzed_times_ns)
 
     runtime_lines = [
         f"input_topology={Path(args.topo).resolve()}",
@@ -864,14 +1304,24 @@ def main():
     runtime_lines.append(f"total_runtime_s={time.perf_counter() - start_time:.3f}")
 
     t0 = time.perf_counter()
-    write_csv_outputs(outdir, summary_df, timeseries_df, residue_df, node_df, runtime_lines)
+    write_interface_outputs(
+        outdir,
+        summary_df,
+        timeseries_df,
+        residue_df,
+        node_df,
+        frame_index_df,
+        framewise_df,
+        presence_payload,
+        runtime_lines,
+    )
     stage_times["write_csv_s"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
     plot_chain_pair_heatmap(summary_df, outdir)
     plot_contact_timeseries(timeseries_df, outdir)
     plot_min_distance_timeseries(timeseries_df, outdir, args.contact_cutoff)
-    plot_residue_pair_heatmap(residue_df, pair_binary_series, analyzed_times_ns or [], outdir)
+    plot_residue_pair_heatmap(residue_df, presence_payload, outdir)
     plot_residue_network(residue_df, outdir, args.min_contact_frac, args.max_edges)
     plot_chain_network(summary_df, outdir)
     plot_top_residue_pairs_barplot(residue_df, outdir)
@@ -884,12 +1334,29 @@ def main():
         ]
     )
     (outdir / "interface_runtime_summary.txt").write_text("\n".join(runtime_lines) + "\n")
+    write_interface_manifest(
+        manifest_path,
+        args,
+        input_files,
+        chain_pairs,
+        polymer_entries,
+        len(universe.trajectory),
+        frame_indices,
+        numerical_outputs,
+        plot_outputs,
+        data_parameters,
+        plot_parameters,
+    )
 
     outputs = [
         "interface_chain_pair_summary.csv",
         "interface_contact_timeseries.csv",
         "interface_residue_pair_contacts.csv",
         "interface_node_summary.csv",
+        "interface_frame_index.csv",
+        "interface_residue_pair_framewise.csv.gz",
+        "interface_residue_pair_presence.npz",
+        "interface_analysis_manifest.json",
         "interface_runtime_summary.txt",
         "Interface_ChainPair_ContactFractions.png",
         "Interface_ContactCount_Timeseries.png",
