@@ -547,32 +547,80 @@ def plot_min_distance_timeseries(timeseries_df, outdir, cutoff_ang):
 def plot_residue_pair_heatmap(residue_df, pair_binary_series, analyzed_times_ns, outdir):
     path = outdir / "Interface_ResiduePair_ContactHeatmap.png"
     if residue_df.empty:
-        plot_placeholder(path, "Top Interface Residue Pairs Over Time", "No residue-residue contacts were observed.")
+        plot_placeholder(
+            path,
+            "Top Interface Residue Pairs Over Time",
+            "No residue-residue contacts were observed."
+        )
         return
 
-    top_df = residue_df.sort_values(["ContactFraction", "ContactFrames"], ascending=[False, False]).head(80)
+    top_df = residue_df.sort_values(
+        ["ContactFraction", "ContactFrames"],
+        ascending=[False, False]
+    ).head(80)
     rows = []
     row_labels = []
     for _, row in top_df.iterrows():
         series = pair_binary_series.get(row["_series_key"])
         if series is None:
             continue
-        row_labels.append(f"{row['ResidueA']} -- {row['ResidueB']}")
+        row_labels.append(
+            f"{row['ResidueA']} -- {row['ResidueB']}"
+        )
         rows.append(series)
 
     if not rows:
-        plot_placeholder(path, "Top Interface Residue Pairs Over Time", "No residue-pair time series were available.")
+        plot_placeholder(
+            path,
+            "Top Interface Residue Pairs Over Time",
+            "No residue-pair time series were available."
+        )
         return
 
-    heatmap_df = pd.DataFrame(rows, index=row_labels, columns=[f"{t:.3f}" for t in analyzed_times_ns])
-    plt.figure(figsize=(max(10, len(analyzed_times_ns) * 0.18), max(6, len(row_labels) * 0.25)))
-    sns.heatmap(heatmap_df, cmap="rocket_r", cbar_kws={"label": "Contact present (0/1)"}, vmin=0, vmax=1)
-    plt.xlabel("Time (ns)")
-    plt.ylabel("Residue pair")
-    plt.title("Top Interface Residue-Pair Contacts Over Time")
-    plt.tight_layout()
-    plt.savefig(path, dpi=300)
-    plt.close()
+    heatmap_df = pd.DataFrame(
+        rows,
+        index=row_labels,
+        columns=[f"{t:.3f}" for t in analyzed_times_ns]
+    )
+
+    n_rows, n_cols = heatmap_df.shape
+
+    # Keep the full trajectory data, but do not let figure width scale with frame count.
+    fig_width = 18.0
+    fig_height = min(14.0, max(6.0, n_rows * 0.20))
+
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+    sns.heatmap(
+        heatmap_df,
+        cmap="rocket_r",
+        cbar_kws={"label": "Contact present (0/1)"},
+        vmin=0,
+        vmax=1,
+        xticklabels=False,
+        ax=ax
+    )
+
+    # Show a small number of evenly spaced time labels while retaining all analyzed frames.
+    if n_cols > 0:
+        n_ticks = min(11, n_cols)
+        tick_indices = np.linspace(0, n_cols - 1, n_ticks, dtype=int)
+        ax.set_xticks(tick_indices + 0.5)
+
+        if len(analyzed_times_ns) == n_cols:
+            tick_labels = [f"{analyzed_times_ns[i]:.1f}" for i in tick_indices]
+        else:
+            tick_labels = [str(i) for i in tick_indices]
+
+        ax.set_xticklabels(tick_labels, rotation=45, ha="right")
+
+    ax.set_xlabel("Time (ns)")
+    ax.set_ylabel("Residue pair")
+    ax.set_title("Top Interface Residue-Pair Contacts Over Time")
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
 def plot_residue_network(residue_df, outdir, min_contact_frac, max_edges):
