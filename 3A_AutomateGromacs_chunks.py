@@ -524,6 +524,16 @@ def is_polymer_chain_type(chain_type):
     }
 
 
+def chain_display_label(entry, index):
+    return (
+        entry.get("current_chain")
+        or entry.get("source_chain")
+        or entry.get("display_label")
+        or entry.get("label")
+        or f"Chain_{index}"
+    )
+
+
 def collect_polymer_chain_entries(chain_map, chain_entry_meta, system_registry=None):
     polymer_entries = []
     registry_chain_types = (system_registry or {}).get("chain_types", {})
@@ -531,6 +541,7 @@ def collect_polymer_chain_entries(chain_map, chain_entry_meta, system_registry=N
     for idx, (label, (start, end)) in enumerate(chain_map.items(), start=1):
         meta = chain_entry_meta.get(label, {})
         current_chain = meta.get("current_chain")
+        source_chain = meta.get("source_chain")
         chain_type = normalize_chain_type(meta.get("chain_type"))
         if (not chain_type or chain_type == "mixed_or_unknown") and current_chain:
             chain_type = normalize_chain_type(registry_chain_types.get(current_chain))
@@ -538,15 +549,18 @@ def collect_polymer_chain_entries(chain_map, chain_entry_meta, system_registry=N
             chain_type = "mixed_or_unknown"
         if not is_polymer_chain_type(chain_type):
             continue
-        polymer_entries.append(
-            {
-                "label": label,
-                "start": start,
-                "end": end,
-                "current_chain": current_chain or label or f"Chain_{idx}",
-                "chain_type": chain_type,
-            }
-        )
+        entry = {
+            "label": label,
+            "start": start,
+            "end": end,
+            "current_chain": current_chain,
+            "source_chain": source_chain,
+            "chain_type": chain_type,
+        }
+        if meta.get("display_label"):
+            entry["display_label"] = meta.get("display_label")
+        entry["display_label"] = chain_display_label(entry, idx)
+        polymer_entries.append(entry)
 
     return polymer_entries
 
@@ -1893,8 +1907,11 @@ def _interface_chain_pairs_for_manifest():
     if args.interface_chain_pairs:
         return [token.strip() for token in str(args.interface_chain_pairs).split(",") if token.strip()]
     labels = []
-    for left, right in combinations(polymer_chain_entries, 2):
-        labels.append(f"{left['display_label']}:{right['display_label']}")
+    indexed_entries = list(enumerate(polymer_chain_entries, start=1))
+    for (left_idx, left), (right_idx, right) in combinations(indexed_entries, 2):
+        left_label = chain_display_label(left, left_idx)
+        right_label = chain_display_label(right, right_idx)
+        labels.append(f"{left_label}:{right_label}")
     return labels
 
 
